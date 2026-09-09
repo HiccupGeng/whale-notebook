@@ -1,6 +1,7 @@
 // src/ui/server.cjs - 决策箱面板 host API（纯逻辑层；http 适配在 lib/index.js）
 // 规则：列表解析复用 viewmodel（inbox 行格式不变式）；删除 = 移入当日归档（可恢复）
-//       + 从 inbox 移除（与入库/忘掉的既有归档语义同构），绝不触碰 entries 与 AGENTS。
+//       + 从 inbox 移除（与入库/忘掉的既有归档语义同构），detail sidecar 随行归档；
+//       详情读取只读本地 details/C###.md，绝不触碰 entries 与 AGENTS。
 'use strict';
 const fs = require('fs');
 const repo = require('../store/repo.cjs');
@@ -24,6 +25,14 @@ function listPayload() {
   return { ok: true, pending: vm.pending, rows: vm.rows };
 }
 
+// GET /whale/inbox/detail?id=C###：读候选详情 sidecar（只读本地文件；旧候选/已归档 → 无详情）
+function detailPayload(id) {
+  if (!ID_RE.test(id)) return { ok: false, error: `非法编号: ${id}（应为 C###）` };
+  const md = repo.readDetail(id);
+  if (md === null) return { ok: false, error: `候选 ${id} 暂无详情（旧候选未生成或已归档）` };
+  return { ok: true, id, text: md };
+}
+
 // POST /whale/inbox/delete { id }：返回 {ok} 或 {ok:false, error}；未知编号不写盘（幂等安全）
 function deleteCandidate({ id, now }) {
   if (!ID_RE.test(id)) return { ok: false, error: `非法编号: ${id}（应为 C###）` };
@@ -42,4 +51,4 @@ function deleteCandidate({ id, now }) {
   return { ok: true, removed, id, archived: true };
 }
 
-module.exports = { ID_RE, localStamp, ensureArchiveDir, listPayload, deleteCandidate };
+module.exports = { ID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate };

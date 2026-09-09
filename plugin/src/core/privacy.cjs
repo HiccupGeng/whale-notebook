@@ -1,12 +1,14 @@
 // core/privacy.cjs - 隐私边界：打码 / 指纹哈希 / 文本规范化（唯一出口）
 // 铁律：任何将要离开本机日志进入 inbox/entries/AGENTS/UI 的文本，必须经过本模块。
+// v0.3：拆出 applyRules（纯规则变换，保留换行结构）+ 两个出口：
+//   redact      = applyRules + 压白（历史行为字节级不变 —— canonText/指纹不变式依赖它）
+//   redactLines = applyRules + 行内压白但保留换行（现象一句话 / detail 摘录需要行结构时用）
 'use strict';
 const path = require('path');
 const os = require('os');
 
-function redact(text) {
-  let s = String(text);
-  // 1) 常见凭据模式
+// 打码规则（纯字符串变换；不压缩空白）。改动规则会影响 canonText 指纹，须谨慎并同步测试。
+function applyRules(s) {
   s = s.replace(/(github_pat_|ghp_|gho_|github_)[A-Za-z0-9_]{16,}/g, 'github_token:[REDACTED]');
   s = s.replace(/(sk|ak|rk)-[A-Za-z0-9_\-]{16,}/g, '[REDACTED]');
   s = s.replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED]');
@@ -21,7 +23,22 @@ function redact(text) {
   // 4) 绝对路径参数化（保留盘符形态信息同时去掉具体路径）
   s = s.replace(/[A-Za-z]:\\[^"'\s\\]+(?:\\[^"'\s\\]+)*/g, (m) => (m.includes('node_modules') ? '<path:node_modules>' : '<path>'));
   s = s.replace(/"([^"]*\.(?:ts|tsx|js|json|md|cs|cshtml|py|ps1|bat|config|yml|yaml|xml|db|sqlite|png|zip|html|css|txt))"/g, '"<file>"');
-  return s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+// 历史行为（v1 不变式：canonText/指纹依赖其输出）：全部空白 -> 单空格
+function redact(text) {
+  return applyRules(String(text)).replace(/\s+/g, ' ').trim();
+}
+
+// v0.3：保留换行结构（行内空白压缩、多余空行折叠），供行级清洗/详情摘录使用
+function redactLines(text) {
+  return applyRules(String(text))
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // FNV-1a 32bit -> base36（指纹去重用，不存原文）
@@ -40,4 +57,4 @@ function canonText(text) {
   return s.slice(0, 90);
 }
 
-module.exports = { redact, hash36, canonText };
+module.exports = { redact, redactLines, hash36, canonText };

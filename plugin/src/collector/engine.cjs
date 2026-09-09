@@ -4,8 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const repo = require('../store/repo.cjs');
-const { redact, hash36, canonText } = require('../core/privacy.cjs');
+const { redactLines, hash36, canonText } = require('../core/privacy.cjs');
 const { fmtTime } = require('../core/util.cjs');
+const { oneLiner } = require('../core/summarize.cjs');
 const { PAT_IDS } = require('./patterns.cjs');
 const { collectEvents } = require('./scanner.cjs');
 const { INBOX_HEADER, inboxRow } = require('../core/schema.cjs');
@@ -46,7 +47,7 @@ function runScan(mode) {
     for (const sid of fs.readdirSync(dir)) {
       const file = path.join(dir, sid, 'session.jsonl.zstd');
       if (!fs.existsSync(file)) continue;
-      try { events.push(...collectEvents(file)); } catch { /* 单文件解码失败跳过 */ }
+      try { events.push(...collectEvents(file).map((e) => Object.assign({}, e, { file }))); } catch { /* 单文件解码失败跳过 */ }
     }
   }
   events.sort((a, b) => a.at - b.at);
@@ -90,10 +91,18 @@ function runScan(mode) {
   for (const ev of fresh) {
     if (ev.cat !== 'error' && !PAT_IDS.has(ev.cat)) continue;
     const existing = rowMap.get(ev.key);
+    // v0.3：打码用 redactLines（保留换行结构）——现象一句话的行级清洗与 detail 摘录需要行边界；
+    // 指纹/聚簇仍走 canonText(原文)（redact 压白行为不变，历史指纹不受影响）。
+    const redLines = redactLines(ev.text);
     if (existing) {
       existing.n++; existing.last = ev.at; existing.wsSet.add(ev.ws);
+      if (existing.evs.length < 16) existing.evs.push({ sid: ev.sid, at: ev.at, ws: ev.ws, file: ev.file, text: redLines });
     } else {
-      rowMap.set(ev.key, { key: ev.key, cat: ev.cat, tool: ev.tool, n: 1, first: ev.at, last: ev.at, wsSet: new Set([ev.ws]), text: redact(ev.text).slice(0, 160) });
+      rowMap.set(ev.key, {
+        key: ev.key, cat: ev.cat, tool: ev.tool, n: 1, first: ev.at, last: ev.at,
+        wsSet: new Set([ev.ws]), text: oneLiner(redLines, 90),
+        evs: [{ sid: ev.sid, at: ev.at, ws: ev.ws, file: ev.file, text: redLines }],
+      });
     }
   }
   for (const r of rowMap.values()) rows.push(r);
@@ -107,7 +116,10 @@ function runScan(mode) {
     const header = inboxOld.trim() ? '' : INBOX_HEADER + '\n';
     const parts = [];
     for (const r of added) {
-      parts.push(inboxRow(state.nextCandidateId++, { cat: r.cat, n: r.n, wsSet: r.wsSet, text: r.text.slice(0, 120), time: fmtTime(r.first) }));
+      const cid = state.nextCandidateId++;
+      parts.push(inboxRow(cid, { cat: r.cat, n: r.n, wsSet: r.wsSet, text: r.text.slice(0, 120), time: fmtTime(r.first) }));
+      // v0.3：同编号同步写详情 sidecar（源引用 + 打码摘录）；失败不阻断行写入
+      try { repo.writeDetail('C' + String(cid).padStart(3, '0'), buildDetailMd(cid, r)); } catch (err) { /* detail 写入失败仅告警 */ }
     }
     fs.writeFileSync(repo.P.inbox, inboxOld.trimEnd() + (inboxOld.trim() ? '\n' : '') + header + parts.join('\n') + '\n', 'utf8');
   }
@@ -121,4 +133,38 @@ function runScan(mode) {
   };
 }
 
-module.exports = { runScan, clusterKey, fpOf, findWorkspaceDirs };
+// v0.3：候选详情 sidecar 内容协议（details/C###.md）。
+// 摘录取簇内文本最长的一条（已 redact），上限 DETAIL_EXCERPT_MAX，超长截断并注明完整错误源路径；
+// 源引用取去重后最新 ≤3 条（sid @ 时间｜工作区｜日志路径）。只含工具失败/特征文本，无 user 原文。
+const DETAIL_EXCERPT_MAX = 600;
+function buildDetailMd(cid, r) {
+  const id = 'C' + String(cid).padStart(3, '0');
+  let best = null;
+  for (const ev of r.evs) if (!best || ev.text.length > best.text.length) best = ev;
+  const seen = new Set();
+  const srcList = [];
+  for (let i = r.evs.length - 1; i >= 0 && srcList.length < 3; i--) {
+    const ev = r.evs[i];
+    if (seen.has(ev.sid)) continue;
+    seen.add(ev.sid);
+    srcList.push(ev);
+  }
+  const excerpt = (best && best.text) ? best.text : '';
+  const L = [];
+  L.push(`# ${id} 候选详情`);
+  L.push('');
+  L.push(`- 一句话：${r.text}`);
+  L.push(`- 类别：${r.cat}｜次数：${r.n}｜工作区：${[...r.wsSet].slice(0, 2).join(',')}｜首次：${fmtTime(r.first)}｜最近：${fmtTime(r.last)}`);
+  L.push(`- 源会话（最近 ${srcList.length} 个）：`);
+  for (const ev of srcList) L.push(`  - ${ev.sid} @ ${fmtTime(ev.at)}｜${ev.ws}｜${ev.file}`);
+  L.push(`- 错误摘录（已打码，上限 ${DETAIL_EXCERPT_MAX} 字）：`);
+  L.push('');
+  L.push('```text');
+  if (excerpt.length > DETAIL_EXCERPT_MAX) L.push(excerpt.slice(0, DETAIL_EXCERPT_MAX) + `\n…（截断：完整错误见源日志 ${best.file}）`);
+  else L.push(excerpt || '（无摘录文本）');
+  L.push('```');
+  L.push('');
+  return L.join('\n');
+}
+
+module.exports = { runScan, clusterKey, fpOf, findWorkspaceDirs, buildDetailMd };

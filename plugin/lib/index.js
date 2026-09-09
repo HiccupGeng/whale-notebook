@@ -5,7 +5,7 @@
 // profiles/web/cordis.patch.yml（deploy-web.cjs 管理）。会话平面能力(工具/preset)另见 src/ui/contracts.md。
 import server from '../src/ui/server.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.2.1' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.3.0' };
 
 function sendJson(res, code, obj) {
   try {
@@ -68,6 +68,18 @@ export function apply(ctx) {
 
   ctx.effect(() => web.register({
     kind: 'exact',
+    path: '/whale/inbox/detail',
+    handler: wrap((req, res) => {
+      if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      const id = new URL(req.url, 'http://whale.local').searchParams.get('id') || '';
+      const out = server.detailPayload(id);
+      if (!out.ok) return sendJson(res, 404, out);
+      sendJson(res, 200, out);
+    }),
+  }), 'whale-notebook: GET /whale/inbox/detail');
+
+  ctx.effect(() => web.register({
+    kind: 'exact',
     path: '/whale/inbox/delete',
     handler: wrap(async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -86,7 +98,7 @@ export function apply(ctx) {
     }),
   }), 'whale-notebook: POST /whale/inbox/delete');
 
-  ctx.logger.info('[whale-notebook] 决策箱面板 API 已注册：GET /whale/inbox, POST /whale/inbox/delete');
+  ctx.logger.info('[whale-notebook] 决策箱面板 API 已注册：GET /whale/inbox, GET /whale/inbox/detail, POST /whale/inbox/delete');
 }
 
 export default { apply, name: PACKAGE.name, version: PACKAGE.version };

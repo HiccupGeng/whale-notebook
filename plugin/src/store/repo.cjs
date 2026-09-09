@@ -18,6 +18,7 @@ const P = {
   settings: path.join(NB_DIR, 'settings.json'),
   entries: path.join(NB_DIR, 'entries'),
   archive: path.join(NB_DIR, 'archive'),
+  details: path.join(NB_DIR, 'details'),
   index: path.join(NB_DIR, 'INDEX.md'),
   agents: path.join(HOME, 'AGENTS.md'),
 };
@@ -51,14 +52,21 @@ function appendInboxRows(rowsText) {
 function initInboxIfMissing(headerText) {
   if (!fs.existsSync(P.inbox)) fs.writeFileSync(P.inbox, headerText + '\n', 'utf8');
 }
-// 从 inbox 移除指定 C 编号行，返回新文本与移除行数
+// 从 inbox 移除指定 C 编号行；联动：被移除候选的 detail sidecar 移入 archive/details/（无源 no-op）。
+// 面板删除 / 忘掉 / 入库移行全部收敛到本入口，保证 detail 与候选行同生命周期（归档不销毁）。
 function removeInboxRows(ids) {
   const text = readInboxText();
   const set = new Set(ids);
-  const lines = text.split('\n');
-  const kept = lines.filter((l) => !(set.has((l.match(/^\| (C\d+) /) || [])[1])));
-  const removed = lines.length - kept.length;
+  const kept = [];
+  const gone = [];
+  for (const l of text.split('\n')) {
+    const m = l.match(/^\| (C\d+) /);
+    if (m && set.has(m[1])) gone.push(m[1]);
+    else kept.push(l);
+  }
+  const removed = gone.length;
   if (removed) fs.writeFileSync(P.inbox, kept.join('\n'), 'utf8');
+  for (const id of gone) archiveDetail(id);
   return { removed };
 }
 // 追加归档
@@ -66,6 +74,35 @@ function archiveInboxRows(rowsText) {
   const name = `archive-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.md`;
   const file = path.join(P.archive, name);
   fs.appendFileSync(file, (fs.existsSync(file) ? '' : '# 归档\n\n| 编号 | 类别 | 次数 | 工作区 | 现象（已打码） | 时间 | 处置 |\n|---|---|---|---|---|---|---|\n') + rowsText + '\n', 'utf8');
+}
+
+// ---- candidate details（v0.3 sidecar：details/C###.md，随候选行同生命周期）----
+// 内容协议见 collector/engine.cjs buildDetailMd：一句话 + 类别/次数 + 源引用 + 打码摘录。
+function detailFilePath(id) { return path.join(P.details, id + '.md'); }
+function writeDetail(id, md) {
+  if (!/^C\d{3}$/.test(id) || typeof md !== 'string') return false;
+  if (!fs.existsSync(P.details)) fs.mkdirSync(P.details, { recursive: true });
+  const file = detailFilePath(id);
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, md, 'utf8');
+  fs.renameSync(tmp, file);
+  return true;
+}
+function readDetail(id) {
+  if (!/^C\d{3}$/.test(id)) return null;
+  const file = detailFilePath(id);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+}
+// 候选行移出 inbox（删除/入库/忘掉）时调用：detail → archive/details/（保留可查，不销毁）
+function archiveDetail(id) {
+  const src = detailFilePath(id);
+  if (!fs.existsSync(src)) return false;
+  const dir = path.join(P.archive, 'details');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  let dst = path.join(dir, id + '.md');
+  if (fs.existsSync(dst)) dst = path.join(dir, `${id}-${Date.now()}.md`);
+  fs.renameSync(src, dst);
+  return true;
 }
 
 // ---- entries ----
@@ -134,5 +171,6 @@ module.exports = {
   readJson, writeJson,
   readSettings, readState, emptyState, writeState,
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows,
+  detailFilePath, writeDetail, readDetail, archiveDetail,
   listEntries, nextEntryId, buildIndexMd,
 };
