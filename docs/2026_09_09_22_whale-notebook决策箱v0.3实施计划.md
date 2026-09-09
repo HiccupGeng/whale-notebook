@@ -37,7 +37,8 @@
 ## 3. 总体设计
 
 - **展示与详情分离**：inbox 行 = 一句话（≤~90 字，规则清洗）；`details/C###.md` = 详情（磁盘文件，不占模型记忆、不进 git/AGENTS/聊天默认展示；仅在用户主动开讨论/自动会话时按需注入新会话上下文，预算 ≤600 字摘录）。
-- **生命周期同构**：删除候选（面板 🗑 / 忘掉 / 入库后移行）→ detail 随行归档至 `archive/details/`，可恢复、不销毁。
+- 生命周期同构：删除候选（面板 🗑 / 忘掉 / 入库后移行）→ detail 随行归档至 `archive/details/`，可恢复、不销毁。
+- **联动范围（已核实的偏差）**：`removeInboxRows` 联动归档覆盖「面板删除」路径；「入库 / 忘掉」由技能流程中的 agent 按 commit.cjs 纯函数手工编辑 inbox 文本（不经 repo API），其候选 detail 会留在 `details/` 成为归档孤儿（KB 级、已打码、本地可查，无害；后续如需清理可加 cli 子命令，本期不做）。
 - **隐私不变式**：detail 事件源是 `tool/result`（工具失败文本），天然不含 user 消息原文；入 detail 前仍过 redact（密钥等）；永不进入 AGENTS.md / entries / git。
 - **重大隐患双闸**：① 指令闸——自动模板内嵌 §2 判定表 + 固定上报行 `[WHALE-RISK]`；② UI 闸——client.js 在投递自动处理后轮询目标会话最新 assistant 回复（client runtime `SessionFace` 提供消息快照 + `loadOlder`，纯 DOM 可订阅），发现上报行即显示红色警示条 + 「转人工讨论」按钮（复用 💬 新会话逻辑，附候选上下文与风险行），候选行打「需人工」标（内存态）。若读消息能力验证受阻：降级为 toast 提示 + 聊天内固定首行本身醒目（兜底）。
 - **详细讨论/自动首条携带 detail**：client 先 `GET /whale/inbox/detail?id=C###`，有 detail 则拼入新会话/自动投递消息（含源路径，供按需精读）；旧候选（无 detail）回退现行为。
