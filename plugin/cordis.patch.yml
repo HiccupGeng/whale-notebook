@@ -1,0 +1,15 @@
+# dsh-whale-notebook — 主机平面行（v2.1 挂载模板）
+# 说明：真实挂载前请先按 plugin/README.md 的 pilot 流程验证（含 --dump-config 核对装载器契约）。
+# 主机平面注册行样例（两平面分工见 src/ui/contracts.md）：
+#
+# - id: whale-memory-store
+#   name: '@deepseek-ai/dsh-whale-notebook'
+#   # config: { ... }
+#
+# 会话平面（工具/注入）不写在这里——它属于 agent preset 行（例如用户级
+# $DSH_HOME/.agent-presets/<preset>/agent.cordis.yml 中的行，配置：
+#   - id: whale-tool
+#     name: '@deepseek-ai/dsh-whale-notebook'
+#     config: { surface: 'tool' }
+# 需与官方 preset 的行式语法一致（见 standard preset 源码）后再启用。
+[]

@@ -1,0 +1,16 @@
+# 用户记忆数据与运行时状态 —— 永不入库（隐私边界）
+# 若在库目录内放置数据副本，以下条目防止误提交
+inbox.md
+state.json
+settings.json
+entries/
+archive/
+.lifecycle/
+*.bak
+*.tmp
+
+# 常规忽略
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

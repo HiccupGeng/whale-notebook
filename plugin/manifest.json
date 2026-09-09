@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "plugin": "@deepseek-ai/dsh-whale-notebook",
+  "manifestVersion": "0.1.0",
+  "comment": "包内默认清单（随插件包版本化）。install --apply 时按此 realize 出站点清单 <dshHome>/whale-notebook/.lifecycle/manifest.json（含实际 hash/state/时间戳）。路径模板变量: {dshHome} = DSH_HOME(默认 ~/.dsh), {nbDir} = {dshHome}/whale-notebook。条目即卸载白名单: 卸载只允许删除/还原清单内条目; 清单外一律不碰。",
+  "entries": [
+    {
+      "id": "agents",
+      "segment": "I",
+      "kind": "edit",
+      "owner": "plugin",
+      "path": "{dshHome}/AGENTS.md",
+      "agentsMode": "whole",
+      "baseline": "absent",
+      "note": "whole 模式: 整文件归本插件所有(安装前不存在), 卸载整文件删除; zones 模式(install --agents-mode zones): 只管理标记区, 区外用户内容不动。zones 区定义见下。",
+      "zones": [
+        { "label": "规则自动段", "begin": "<!-- whale-notebook:rules -->", "end": "<!-- /whale-notebook:rules -->" },
+        { "label": "隐私提示区", "begin": "<!-- whale-notebook:privacy -->", "end": "<!-- /whale-notebook:privacy -->" }
+      ],
+      "state": "pending"
+    },
+    {
+      "id": "skill",
+      "segment": "I",
+      "kind": "file",
+      "owner": "plugin",
+      "path": "{dshHome}/skills/whale-notebook.md",
+      "baseline": "absent",
+      "note": "整文件属本插件(L2 技能)。删除前字节级快照至 .lifecycle/backups 以便重装/恢复。",
+      "state": "pending"
+    },
+    {
+      "id": "data",
+      "segment": "D",
+      "kind": "dir",
+      "owner": "user-memory",
+      "path": "{nbDir}",
+      "baseline": "absent",
+      "note": "用户记忆数据(含本插件源码镜像)。remove 永不触碰; purge 前必须 --export-dir 导出 + --yes 二次确认。",
+      "state": "pending"
+    },
+    {
+      "id": "runtime-pkg",
+      "segment": "R",
+      "kind": "dir",
+      "owner": "plugin",
+      "path": "{dshHome}/profiles/node_modules/@deepseek-ai/dsh-whale-notebook",
+      "state": "deferred",
+      "note": "v2.1 真实挂载后启用(seam 实测)。两拍删除: 摘声明+移入 .lifecycle/quarantine, 重启后清理。"
+    },
+    {
+      "id": "runtime-bundles",
+      "segment": "R",
+      "kind": "edit",
+      "owner": "mixed",
+      "path": "{dshHome}/profiles/web/package.json",
+      "jsonSurgery": { "path": ["dsh", "profile", "bundles"], "value": "@deepseek-ai/dsh-whale-notebook" },
+      "state": "deferred",
+      "note": "v2.1 挂载时对 bundles 数组做 JSON 结构手术(只增删元素, 禁止文本替换); 前像备份于 .lifecycle/backups。"
+    }
+  ]
+}
