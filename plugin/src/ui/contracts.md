@@ -18,7 +18,7 @@
 
 | 功能 | 推荐平面 | 说明 |
 |---|---|---|
-| ① 展示功能（侧栏/面板徽标、待审列表卡片） | **client-plugin**（dsh web 浏览器侧插件图，host 经 `window.__DSH_BOOT__` 引导） | 轮询 `inboxViewModel`（经 host API 暴露），渲染徽标/列表；只读 |
+| ① 展示功能（侧栏/面板徽标、待审列表卡片） | **client-plugin**（dsh web 浏览器侧插件图，host 经 `window.__DSH_BOOT__` 引导） | **✅ 已实现（v0.2.1 决策箱面板）**：browser half `lib/client.js` + host API `GET/POST /whale/inbox(delete)`（`server.cjs` 纯逻辑 + `lib/index.js` 注册）。部署/回退 `scripts/deploy-web.cjs`；生效需重启 dsh web。轮询 inboxViewModel 形状（rows/pending），渲染右缘悬浮面板；只读 + 删除(归档) |
 | ② 独立小对话框（与会话并行的鲸鱼窗口） | client-plugin 的自有 surface + host API | 复用 ① 的桥；审核动作仍要求「带编号回写会话」由 agent 执行 |
 | ③ 桌宠（悬浮/托盘/气泡） | ①外部进程桥(ACP/sdk) 或 ②client overlay | 两种形态都只消费 inboxViewModel/事件流；本仓库只提供事件源与 JSON 契约，不绑定具体桌宠实现 |
 | ④ 外观（皮肤/主题/动画） | client-plugin 层 | 与数据层零耦合 |

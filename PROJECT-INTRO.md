@@ -25,7 +25,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `~/.dsh/skills/whale-notebook.md` | L2 技能：操作手册（触发词→流程），技能目录热加载 | I 集成段 |
 | `~/.dsh/whale-notebook/` | ★运行数据目录（下详） | D 数据段 |
 | `~/.dsh/whale-notebook/plugin/` | ★插件包源码（模块化，v2 结构；**运行源码权威位**） | D 内（发布镜像于 GitHub 库） |
-| `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时（**v2.1 挂载后才有**） | R 运行时段（deferred） |
+| `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时：插件包部署副本（**v2.1 决策箱面板**；`plugin/scripts/deploy-web.cjs` 管理，重启 dsh web 生效） | R 运行时段（lifecycle 清单内仍 deferred，部署副本由 deploy 工具管） |
 
 ### 运行数据目录 `~/.dsh/whale-notebook/` 内部
 
@@ -93,9 +93,13 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 生效 | `inject/agents.cjs` | AGENTS 自动段正文生成（排序/上限/尾注/标记内替换）；落盘由 agent 用 edit 工具执行 | `buildSectionBody`、`applyToText` |
 | 审核 | `review/commit.cjs` | 计划式入库纯函数（展示→确认后由 agent 落盘） | `planCommit` |
 | 展示 | `ui/viewmodel.cjs` | 待审/统计视图模型（UI 唯一数据入口） | `inboxViewModel` 等 |
-| 展示 | `ui/contracts.md` | UI/桌宠接入契约与事件（未来平面） | — |
-| 入口 | `lib/index.js` | cordis 插件入口（v2.1 apply 桩，只做装配） | `apply` |
-| 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（现为 `[]`） | — |
+| 展示 | `ui/server.cjs` | 决策箱面板 host API 纯逻辑（list / delete→归档，幂等） | `listPayload`、`deleteCandidate` |
+| 展示 | `ui/contracts.md` | UI/桌宠接入契约与事件平面 | — |
+| 入口 | `lib/index.js` | cordis 插件入口 host half：注册 `GET /whale/inbox`、`POST /whale/inbox/delete` | `apply` |
+| 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作：自动处理/讨论新会话/删除） | `apply`（browser） |
+| 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 profiles/web/cordis.patch.yml） | — |
+| ★部署 | `scripts/deploy-web.cjs` | 复制包 → profile node_modules + patch loader 行（幂等 dry/apply/undo/check；生效需重启 dsh web） | — |
+| 测试 | `src/ui/server.selftest.cjs`、`scripts/bundle-smoke.cjs` | 面板 host 逻辑沙盒 17 断言 / client bundle 桩执行 | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单） | — |
 
@@ -132,8 +136,8 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 - **v1**（已完成）：skill + scripts 落地（AGENTS 标记注入链路打通；本机有 12 条种子候选 C001–C012 待审）。
 - **v2.0**（已完成）：插件化模块重构（六模块 + 单向依赖；行为/数据不变式兼容）。
 - **v2.0.x 当前**：第 0 功能「生命周期」v0.1 完成（lifecycle 工具 + manifest + 演练）；GitHub 私有库建立 + 一键同步工具。
-- **v2.1（待做）**：真实 cordis 挂载（headless pilot → web profile bundles → **用户择机重启 GUI**）；R 段启用（detach/两拍删除/隔离区）。
-- **未来**：失败事件实时采集（订阅 tool/result、agent/request-error）；会话平面挂载；UI 平面（待审徽标/面板/小对话框/桌宠，契约已备）。
+- **v2.1（已完成代码与部署工具，待重启生效）**：决策箱悬浮侧边面板 —— host half（`/whale/*` API）+ browser half（client-plugin，零依赖 bundle）+ `deploy-web.cjs` 一键部署；设计见 `docs/2026_09_09_18_…决策箱面板设计.md`。**生效需用户择机重启 GUI**。
+- **未来**：失败事件实时采集（订阅 tool/result、agent/request-error）；会话平面挂载；面板增强（桌宠形态/事件推送，契约已备）。
 
 ## 9. 文档导航（docs/，均为设计记录）
 
@@ -143,6 +147,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `2026_09_09_16_whale-notebook插件化架构设计.md` | v2.0 架构：三平面(H/S/U) + 六模块 + 挂载路线 |
 | `2026_09_09_16_whale-notebook生命周期设计.md` | 第 0 功能设计：足迹/清单/卸载分级/验收 |
 | `2026_09_09_17_whale-notebook生态调研核实与定位对比.md` | 生态核实（14 项目）+ 四维差异 + 结论 |
+| `2026_09_09_18_whale-notebook决策箱面板设计.md` | v2.1 决策箱面板：机制勘察/架构/契约/部署验收 |
 
 ## 10. 常用命令速查
 
@@ -150,6 +155,9 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--prewarm|--stats|--render-rules   # 采集 CLI(v1 壳)
 node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs                                # 生命周期沙盒自测(66 PASS)
 node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check|install|uninstall …    # 生命周期工具
+node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--undo|--check]      # 决策箱面板部署(改后需重启 dsh web)
+node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs                           # 面板 host 逻辑沙盒自测(17 PASS)
+node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs                             # client bundle 桩检查
 node ~/.dsh/whale-notebook/scripts/redact.test.cjs                                      # 打码回归
 node <repo>/tools/sync-release.cjs                                                      # 一键同步提交(库内)
 ```
@@ -161,4 +169,5 @@ node <repo>/tools/sync-release.cjs                                              
 3. 任何**写**数据：先用 repo 层纯函数/生成器出计划 → **展示给用户** → 用户确认 → 才落盘；AGENTS 自动段改动用 edit 工具替换标记区内整段（保证 agent-instructions 观测到变更）。
 4. 私密内容处理走 `core/privacy.cjs`；拿不准的文本一律先打码。
 5. 涉及安装/卸载/删除 → 走 `lifecycle/cli.cjs`（干跑 → 展示成果清单 → 确认 → --apply），绝不手工乱删。
-6. 改完运行源码/文档 → `node tools\sync-release.cjs` 同步到 GitHub 库（在镜像库目录下执行）。
+6. 决策箱面板（GUI 右缘悬浮件）：列表只读 inbox；「删除」动作=移入 archive（可恢复）；面板部署/回退/升级一律 `plugin/scripts/deploy-web.cjs`（改 client.js 后需重启 dsh web）。
+7. 改完运行源码/文档 → `node tools\sync-release.cjs` 同步到 GitHub 库（在镜像库目录下执行）。

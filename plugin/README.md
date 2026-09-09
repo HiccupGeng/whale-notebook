@@ -1,14 +1,15 @@
-# dsh-whale-notebook 插件包（v2.0 模块化源码 / v2.1 挂载待验证）
+# dsh-whale-notebook 插件包（v0.2.1：双半插件 · 决策箱面板已就绪）
 
-鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载。
+鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。
 
 ## 模块地图
 
 ```
 plugin/
-├─ package.json            # @deepseek-ai/dsh-whale-notebook (type: module)
-├─ cordis.patch.yml        # 主机平面挂载模板(空行, 待 pilot)
-├─ lib/index.js            # 插件入口(占位 apply, v2.1 实现)
+├─ package.json            # @deepseek-ai/dsh-whale-notebook (type: module; dsh.client 声明)
+├─ cordis.patch.yml        # 主机平面挂载模板(参考；现场行由 deploy-web.cjs 管理)
+├─ lib/index.js            # 插件入口(host half: /whale/* API 注册, v2.1)
+├─ lib/client.js           # 浏览器半边(决策箱悬浮面板 bundle, __ModuleLoader__ 零依赖)
 ├─ manifest.json           # ★包内默认清单(生命周期: 足迹=卸载白名单, schema v1)
 ├─ lifecycle/              # ★自举生命周期模块(第 0 功能: 安装/卸载/清单, 仅 node 内建)
 │  ├─ cli.cjs              # status/check/install/uninstall detach|remove|purge
@@ -17,6 +18,9 @@ plugin/
 │  ├─ manifest.cjs         # 站点清单 .lifecycle/manifest.json 存取/合并/快照
 │  ├─ fsx.cjs              # 原子写/哈希/树复制删除(字节安全)
 │  └─ selftest.cjs         # 沙盒端到端自测(临时 home, 验收 §13)
+├─ scripts/
+│  ├─ deploy-web.cjs       # ★部署工具: 复制包 + patch web profile(幂等; dry/apply/undo/check)
+│  └─ bundle-smoke.cjs     # client bundle 桩执行检查(vm + __ModuleLoader__ 桩)
 └─ src/
 ```
    ├─ core/                # ★领域层(零依赖, 全模块共用契约)
@@ -35,19 +39,30 @@ plugin/
    │  └─ agents.cjs        # 自动段正文生成器(规则行排序/上限/尾注/标记内替换)
    ├─ review/              # ★审核层(人工确认闭环)
    │  └─ commit.cjs        # 计划式入库 planCommit(纯函数) + 候选行选取
-   └─ ui/                  # ★展示/外观层(未来: 面板/小对话框/桌宠)
+   └─ ui/                  # ★展示/外观层(已落地: 决策箱面板)
       ├─ contracts.md      # 接入契约(视图模型/事件/推荐平面)
-      └─ viewmodel.cjs     # inboxViewModel/statsViewModel(UI 唯一数据入口)
+      ├─ viewmodel.cjs     # inboxViewModel/statsViewModel(UI 唯一数据入口)
+      ├─ server.cjs        # host API 纯逻辑(list/delete→归档; 幂等; http 适配在 lib/index.js)
+      └─ server.selftest.cjs # server.cjs 沙盒单测(临时 DSH_HOME)
 ```
 
 旧文件 → 新归属：`scripts/mine.cjs`=兼容薄壳（转发 cli.cjs）；`scripts/redact.test.cjs`=core/privacy 测试；数据文件(inbox/entries/state/settings/INDEX/archive)不动。
 
-## 挂载（v2.1 路线，勿在 v2.0 执行）
+## 部署：决策箱面板（v2.1 已实现）
 
-1. **pilot 先行**：先对 `headless` profile 复制本包 + 追加 bundles + 跑一次性任务验证装载，不动 web。
-2. **web 挂载**（需你重启 GUI，会中断在线会话）：本包复制到 `profiles/node_modules/@deepseek-ai/dsh-whale-notebook`（hoisted 布局保证依赖解析）→ `profiles/web/package.json` 的 `dsh.profile.bundles` 追加包名 → 重启 → `--dump-config` 核对装载。
-3. **会话平面**（工具/注入/事件监听）：用户级 preset `$DSH_HOME/.agent-presets/` 行式挂载（先核对 standard preset 语法与 isolate realm 约束）。
-4. **UI/桌宠**：client-plugin / 外部桥，只消费 `src/ui` 契约（见 contracts.md）。
+设计文档：项目 `docs/2026_09_09_18_whale-notebook决策箱面板设计.md`。浏览器半边=悬浮侧边面板（待审核候选列表 + 自动处理/详细讨论/删除）；host 半边注册 `GET /whale/inbox` 与 `POST /whale/inbox/delete`。
+
+```powershell
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --apply    # 复制包 + patch ~/.dsh/profiles/web/cordis.patch.yml
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --check    # 自检
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply [--yes]  # 回退
+```
+
+- **生效需重启 dsh web**（loader 行集启动时固定；重启会中断在线会话，历史已持久化可恢复）→ 重启后刷新页面即出现面板。
+- dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可。
+- 改动 bundle/代码后：deploy `--apply` → 重启。
+- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 17 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩）。
 
 ### 风险与前提（务必先读）
 
