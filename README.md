@@ -9,7 +9,7 @@ DeepSeek Harness（DSH）的自我进化机制插件：自动/半自动挖掘本
 | 路径 | 内容 |
 |---|---|
 | `PROJECT-INTRO.md` | ★项目总览（与权威 `~/.dsh/whale-notebook/PROJECT-INTRO.md` 同步；全景/模块功能/命令/文档导航，新上手或 AI 会话先读） |
-| `docs/` | 设计/实施/调研文档：实施记录 · 插件化架构(v2.0) · 生命周期设计 · 生态调研核实 · 决策箱面板设计(v2.1) · 决策箱 v0.3 实施计划 |
+| `docs/` | 设计/实施/调研文档：实施记录 · 插件化架构(v2.0) · 生命周期设计 · 生态调研核实 · 决策箱面板设计(v2.1) · 决策箱 v0.3 实施计划 · 已解决展示与分类需求梳理 · v0.4 实施计划 |
 | `plugin/` | `@deepseek-ai/dsh-whale-notebook` 插件包源码：core/store/collector/inject/review/ui 六模块 + `lifecycle/`(自举安装卸载工具) + 决策箱面板双半(`lib/client.js` browser / `lib/index.js` host / `src/ui/server.cjs`) + `scripts/deploy-web.cjs`(一键部署 web profile) + `manifest.json` + `cordis.patch.yml` |
 | `scripts/` | v1 兼容薄壳与回归测试（引用 `../plugin/src`，需与 plugin 同层放置运行） |
 | `README.md` | 本文件 |
@@ -19,7 +19,8 @@ DeepSeek Harness（DSH）的自我进化机制插件：自动/半自动挖掘本
 - **v2.0**：模块化重构完成（纯结构，零挂载风险）；v1 行为兼容（12 条种子候选原样、测试全绿）。
 - **v2.0.x（当前）**：第 0 功能「生命周期」v0.1 已完成——`plugin/lifecycle/` 提供 `status / check / install / uninstall detach|remove|purge`（两段式：干跑计划 → 确认 → `--apply`），覆盖 I(AGENTS+skill)+D(数据) 段足迹登记、字节级快照备份、重装还原、purge 先导出后删除；沙盒自测 66 PASS。
 - **v2.1 + v0.3.0（代码与部署已完成，待用户重启 GUI 生效）**：决策箱面板 = 真实 cordis 双半挂载——host half 注册 `GET /whale/inbox` / `GET /whale/inbox/detail` / `POST /whale/inbox/delete`（复用 repo.cjs/viewmodel，删除=移入 archive 可恢复）；browser half 为 `__ModuleLoader__` 零依赖 bundle（GUI 右缘悬浮件：一句话现象列表 + ⚡自动处理/💬详细讨论/红色✕删除）。v0.3：候选详情 sidecar（`details/C###.md`，打码摘录 ≤600 字 + 源会话引用）、自动处理判定表硬规则、重大隐患 `[WHALE-RISK]` 上报 → 红色警示条 + 一键转人工讨论。部署：`node plugin/scripts/deploy-web.cjs --apply` → **重启 dsh web**。沙盒 5 套件 64 断言 + bundle 桩检查全绿。
-- **未来**：失败事件实时采集、会话平面挂载、面板增强（桌宠形态/事件推送）——接入契约已备于 `plugin/src/ui/contracts.md`。
+- **v0.4.0（代码与部署已完成，随重启同批生效）**：已解决墙 + 全局/项目两级分类——条目 frontmatter 增 `scope: global|project` + `projects` 白名单（缺省 global 零迁移）；B1：AGENTS 自动段只收全局规则，项目级不进全局注入（状态行注明去向）；A1 文档墙 INDEX.md（全局区/项目区 × 类别 + 停用收尾，`scripts/mine.cjs --wall` 预览）+ A2 面板「已解决」卡（新端点 `GET /whale/solved`、`GET /whale/entry?id=E###`）。决策：轻口径（入库=已处理）；A1+A2 一期都做；先 B1 后 B2（B2 项目级自动注入留待三期逐项目试点）。沙盒 5 套件 86 断言 + bundle 桩（含 v0.4 结构断言）全绿。
+- **未来**：失败事件实时采集、会话平面挂载、B2 项目级自动注入、复发检测（二期）、面板增强（桌宠形态/事件推送）——接入契约已备于 `plugin/src/ui/contracts.md`。
 
 ## 隐私边界（务必遵守）
 
@@ -47,11 +48,11 @@ DeepSeek Harness（DSH）的自我进化机制插件：自动/半自动挖掘本
 
 ```text
 node plugin/lifecycle/selftest.cjs      # 生命周期沙盒自测(临时 home, 不碰真实环境)
-node plugin/src/ui/server.selftest.cjs  # 决策箱面板 host 逻辑沙盒自测(23 PASS)
+node plugin/src/ui/server.selftest.cjs  # 决策箱面板 host 逻辑沙盒自测(45 PASS: 含 v0.4 墙/B1)
 node plugin/src/core/privacy.selftest.cjs # 打码出口回归(redact 不变式 + redactLines)
 node plugin/src/core/summarize.selftest.cjs # 现象一句话单测
 node plugin/src/collector/engine.selftest.cjs # detail sidecar 协议单测
 node plugin/src/collector/e2e.selftest.cjs # mine 全链演练(zstd 假会话 → inbox+detail)
-node plugin/scripts/bundle-smoke.cjs    # client bundle 桩执行检查
+node plugin/scripts/bundle-smoke.cjs    # client bundle 桩执行检查(含 v0.4 双卡结构断言)
 node scripts/redact.test.cjs            # 打码回归测试
 ```

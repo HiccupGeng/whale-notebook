@@ -15,6 +15,12 @@ function run(argv) {
     console.log(body);
     return { ok: true, text: body };
   }
+  if (mode === '--wall') {
+    // v0.4 预览：当前条目 → INDEX.md「已解决墙」正文（dry：只打印，落盘由 agent 展示确认后写）
+    const text = repo.buildIndexMd(listEntries());
+    console.log(text);
+    return { ok: true, text };
+  }
   const out = runScan(mode);
   if (out.ok) console.log(out.text);
   else console.error(out.text);

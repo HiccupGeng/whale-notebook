@@ -1,12 +1,16 @@
-// lib/client.js - dsh-whale-notebook 浏览器半边：鲸鱼决策箱悬浮侧边面板
+// lib/client.js - dsh-whale-notebook 浏览器半边：鲸鱼决策箱悬浮侧边面板（双卡：待审箱｜已解决墙）
 // 手写 __ModuleLoader__ bundle（与官方 client 产物同格式；零 require 依赖，纯 DOM + CSS）。
 // 数据/动作通道：
 //   GET  /whale/inbox            -> {pending, rows}                 （host half 注册）
 //   GET  /whale/inbox/detail     -> {ok, text} 候选详情 sidecar（v0.3）
 //   POST /whale/inbox/delete     -> 删除（移入 archive，可恢复）
+//   GET  /whale/solved           -> 已解决墙聚合 stats/global/projects/disabled（v0.4）
+//   GET  /whale/entry?id=E###    -> 条目全文（v0.4；行展开详情）
 //   ctx.sessions / ctx.workspaces（官方 client-runtime 服务）-> 自动处理(投递当前会话)/详细讨论(新会话)
 // v0.3 语义：自动处理 = 判定表硬规则（模板内嵌）；重大隐患 -> agent 固定行 [WHALE-RISK]，
 //            面板轮询会话消息快照（ConversationSnapshot.nodes / .partial）识别并弹红色警示条。
+// v0.4 语义：已解决墙 = 轻口径（入库即已处理）；全局区/项目区分组，行点击拉条目全文展开；
+//            无待审且无条目时整面板隐藏（不打扰）；project 级条目仅展示、不进任何注入面。
 window.__ModuleLoader__.load({
 	id: "@deepseek-ai/dsh-whale-notebook",
 	factory: (require) => {
@@ -23,8 +27,25 @@ window.__ModuleLoader__.load({
 			".wh-tab-label{writing-mode:vertical-rl;letter-spacing:1px;color:var(--dsw-alias-label-tertiary,#8a90a0);font-size:10px;font-weight:600}",
 			".wh-badge{position:absolute;top:-5px;right:-7px;min-width:15px;height:15px;padding:0 3px;border-radius:99px;background:#e5484d;color:#fff;font-size:10px;line-height:15px;text-align:center;font-weight:700;box-sizing:border-box}",
 			".wh-card{display:none;flex-direction:column;width:280px;max-height:248px;border-radius:12px;background:var(--dsw-alias-bg-base,#ffffff);border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.14));box-shadow:0 10px 30px rgba(0,0,0,.20);overflow:hidden}",
-			".wh-open .wh-tab{display:none}",
-			".wh-open .wh-card{display:flex}",
+			".wh-tab+.wh-tab{margin-top:6px}",
+			".wh-open-inbox .wh-tab,.wh-open-solved .wh-tab{display:none}",
+			".wh-open-inbox .wh-card-inbox{display:flex}",
+			".wh-open-solved .wh-card-solved{display:flex}",
+			".wh-card-solved{width:336px;max-height:460px}",
+			".wh-badge2{position:absolute;top:-5px;right:-7px;min-width:15px;height:15px;padding:0 3px;border-radius:99px;background:#2f9e6e;color:#fff;font-size:10px;line-height:15px;text-align:center;font-weight:700;box-sizing:border-box}",
+			".wh-stats{flex:none;display:flex;align-items:center;gap:10px;padding:4px 12px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06))}",
+			".wh-sec{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px 2px;font-size:11px;font-weight:700;color:var(--dsw-alias-label-primary,#24272d)}",
+			".wh-sec-n{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);font-weight:600}",
+			".wh-grp{padding:5px 8px 1px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);font-weight:700}",
+			".wh-srow{cursor:pointer}",
+			".wh-srow .wh-rule{margin-top:2px;color:var(--dsw-alias-label-secondary,#565b66);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}",
+			".wh-srow-open{background:rgba(90,130,255,.08)}",
+			".wh-det{display:none;white-space:pre-wrap;word-break:break-all;margin-top:4px;padding:6px 8px;background:rgba(128,128,128,.09);border-radius:6px;font:11px/1.5 ui-monospace,Consolas,monospace;color:var(--dsw-alias-label-secondary,#565b66);max-height:210px;overflow:auto}",
+			".wh-det-on{display:block}",
+			".wh-scope{flex:none;font-size:10px;line-height:1;padding:2px 5px;border-radius:99px;font-weight:700}",
+			".wh-scope-g{background:rgba(47,158,110,.16);color:#1f7a52}",
+			".wh-scope-p{background:rgba(180,130,60,.18);color:#8a6414}",
+			".wh-last{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
 			".wh-head{flex:none;display:flex;align-items:center;gap:4px;padding:7px 8px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.08))}",
 			".wh-head-title{flex:1;min-width:0;font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
 			".wh-icn{flex:none;width:20px;height:20px;padding:0;border:none;border-radius:6px;background:transparent;color:inherit;cursor:pointer;font-size:12px;line-height:20px;opacity:.5;text-align:center}",
@@ -104,6 +125,25 @@ window.__ModuleLoader__.load({
 					return j;
 				});
 			});
+		}
+		// v0.4：已解决墙聚合（只读 entries frontmatter）
+		function apiSolved() {
+			return fetch("/whale/solved", { headers: { accept: "application/json" } }).then(function (r) {
+				if (!r.ok) throw new Error("HTTP " + r.status);
+				return r.json();
+			});
+		}
+		// v0.4：条目全文（行展开详情；失败/不存在 → null）
+		function apiEntry(id) {
+			return fetch("/whale/entry?id=" + encodeURIComponent(id), { headers: { accept: "application/json" } })
+				.then(function (r) { return r.json().catch(function () { return null; }); })
+				.then(function (j) { return (j && j.ok === true && j.text) ? j.text : null; })
+				.catch(function () { return null; });
+		}
+		// 剥离条目全文 frontmatter（首行 --- 至第二个 --- 之间），只留可读正文
+		function stripFrontmatter(text) {
+			var i = String(text || "").indexOf("\n---\n");
+			return i >= 0 ? text.slice(i + 5) : text;
 		}
 		function waitBinding(sessions, id, timeoutMs) {
 			var t0 = Date.now();
@@ -238,7 +278,8 @@ window.__ModuleLoader__.load({
 
 			var rows = [];
 			var pending = 0;
-			var open = false;
+			var solved = null;   // v0.4：已解决墙数据（/whale/solved 聚合）
+			var open = null;     // null | 'inbox' | 'solved'
 			var timer = null;
 			var toastTimer = null;
 			var toastEl = null;
@@ -248,17 +289,29 @@ window.__ModuleLoader__.load({
 			var alertTimer = null;
 
 			var box = el("div", "wh-box");
-			var tab = el("div", "wh-tab");
-			tab.title = "鲸鱼决策箱：待审核候选（点击展开）";
+			// 入口 tab A：待审（有待审核候选才显示；红徽 = 待审数）
+			var tabA = el("div", "wh-tab");
+			tabA.title = "鲸鱼待审箱：待审核候选（点击展开）";
 			var tabIco = el("div", "wh-tab-ico", "🐳");
 			var tabLabel = el("div", "wh-tab-label", "待审");
 			var badge = el("div", "wh-badge", "0");
-			tab.appendChild(tabIco);
-			tab.appendChild(tabLabel);
-			tab.appendChild(badge);
-			box.appendChild(tab);
+			tabA.appendChild(tabIco);
+			tabA.appendChild(tabLabel);
+			tabA.appendChild(badge);
+			box.appendChild(tabA);
+			// 入口 tab B：已解决（v0.4；有 active 条目才显示；绿徽 = 已解决数）
+			var tabB = el("div", "wh-tab");
+			tabB.title = "鲸鱼已解决墙：已入库条目（点击展开）";
+			var tabIco2 = el("div", "wh-tab-ico", "✅");
+			var tabLabel2 = el("div", "wh-tab-label", "已解决");
+			var badge2 = el("div", "wh-badge2", "0");
+			tabB.appendChild(tabIco2);
+			tabB.appendChild(tabLabel2);
+			tabB.appendChild(badge2);
+			box.appendChild(tabB);
 
-			var card = el("div", "wh-card");
+			// 卡 A：待审列表（原行为不变）
+			var card = el("div", "wh-card wh-card-inbox");
 			var head = el("div", "wh-head");
 			var headTitle = el("div", "wh-head-title", "🐳 待审箱");
 			var btnRefresh = el("button", "wh-icn", "⟳");
@@ -274,6 +327,25 @@ window.__ModuleLoader__.load({
 			var foot = el("div", "wh-foot", "候选来自 inbox.md｜删除移入 archive");
 			card.appendChild(foot);
 			box.appendChild(card);
+			// 卡 B：已解决墙（v0.4；轻口径：入库=已处理；与文档墙 INDEX.md 同源）
+			var cardB = el("div", "wh-card wh-card-solved");
+			var headB = el("div", "wh-head");
+			var headTitleB = el("div", "wh-head-title", "✅ 已解决");
+			var btnRefreshB = el("button", "wh-icn", "⟳");
+			btnRefreshB.title = "刷新";
+			var btnCloseB = el("button", "wh-icn", "✕");
+			btnCloseB.title = "收起 (Esc)";
+			headB.appendChild(headTitleB);
+			headB.appendChild(btnRefreshB);
+			headB.appendChild(btnCloseB);
+			cardB.appendChild(headB);
+			var statsB = el("div", "wh-stats");
+			cardB.appendChild(statsB);
+			var listB = el("div", "wh-list");
+			cardB.appendChild(listB);
+			var footB = el("div", "wh-foot", "轻口径：入库=已处理｜文档墙 INDEX.md 同源｜点击条目看详情");
+			cardB.appendChild(footB);
+			box.appendChild(cardB);
 			document.body.appendChild(box);
 			if (toastEl === null) {
 				toastEl = el("div", "wh-toast");
@@ -333,15 +405,49 @@ window.__ModuleLoader__.load({
 				}
 			}
 
+			// v0.4：已解决墙状态机（无待审且无已解决 → 整面板隐藏，保持「不打扰」）
 			function applyState() {
-				if (pending <= 0) {
+				var showA = pending > 0;
+				var showB = !!(solved && solved.stats && solved.stats.active > 0);
+				if (!showA && !showB) {
 					box.style.display = "none";
-					open = false;
+					open = null;
+					box.classList.remove("wh-open-inbox", "wh-open-solved");
 					return;
 				}
 				box.style.display = "";
-				badge.textContent = pending > 99 ? "99+" : String(pending);
-				headTitle.textContent = "🐳 待审箱 · " + pending;
+				tabA.style.display = showA ? "" : "none";
+				if (showA) {
+					badge.textContent = pending > 99 ? "99+" : String(pending);
+					headTitle.textContent = "🐳 待审箱 · " + pending;
+				}
+				tabB.style.display = showB ? "" : "none";
+				if (showB) {
+					badge2.textContent = solved.stats.active > 99 ? "99+" : String(solved.stats.active);
+					headTitleB.textContent = "✅ 已解决 · " + solved.stats.active;
+				}
+				if ((open === "inbox" && !showA) || (open === "solved" && !showB)) {
+					open = null;
+					box.classList.remove("wh-open-inbox", "wh-open-solved");
+				}
+			}
+
+			function setMode(mode) {
+				if (open === mode) {
+					open = null;
+					box.classList.remove("wh-open-inbox", "wh-open-solved");
+					return;
+				}
+				open = mode;
+				box.classList.remove("wh-open-inbox", "wh-open-solved");
+				box.classList.add(mode === "solved" ? "wh-open-solved" : "wh-open-inbox");
+				if (mode === "inbox") {
+					refresh(true);
+					renderRows();
+				} else {
+					refreshSolved(true);
+					renderSolved();
+				}
 			}
 
 			function refresh(silent) {
@@ -350,18 +456,89 @@ window.__ModuleLoader__.load({
 					rows = j.rows || [];
 					pending = j.pending || 0;
 					applyState();
-					if (open) renderRows();
+					if (open === "inbox") renderRows();
 				}, function (err) {
 					// 宿主 API 未就绪（服务重启窗口等）：静默降级，绝不打扰用户任务
 					if (!silent) console.warn("[whale-panel] 拉取 /whale/inbox 失败:", err && err.message ? err.message : err);
 				});
 			}
 
-			function setOpen(v) {
-				if (v === open) return;
-				open = v;
-				box.classList.toggle("wh-open", open);
-				if (open) { refresh(true); }
+			function refreshSolved(silent) {
+				return apiSolved().then(function (j) {
+					if (!j || j.ok !== true) throw new Error(j && j.error ? j.error : "响应异常");
+					solved = j;
+					applyState();
+					if (open === "solved") renderSolved();
+				}, function (err) {
+					if (!silent) console.warn("[whale-panel] 拉取 /whale/solved 失败:", err && err.message ? err.message : err);
+				});
+			}
+
+			// ---- 已解决墙渲染（v0.4）----
+			function solvedRowEl(e, withCat) {
+				var row = el("div", "wh-row wh-srow");
+				var meta = el("div", "wh-meta");
+				meta.appendChild(el("span", "wh-id", e.id));
+				meta.appendChild(el("span", "wh-scope " + (e.scope === "project" ? "wh-scope-p" : "wh-scope-g"), e.scope === "project" ? "项目" : "全局"));
+				if (withCat) meta.appendChild(el("span", "wh-cat", e.category));
+				meta.appendChild(el("span", "wh-n", "×" + e.occurrences));
+				meta.appendChild(el("span", "wh-last", e.lastSeen || ""));
+				row.appendChild(meta);
+				row.appendChild(el("div", "wh-text", e.title || "（无标题）"));
+				row.appendChild(el("div", "wh-rule", e.rule || ""));
+				var det = el("div", "wh-det");
+				row.appendChild(det);
+				row.addEventListener("click", function () {
+					var on = det.classList.contains("wh-det-on");
+					if (on) {
+						det.classList.remove("wh-det-on");
+						row.classList.remove("wh-srow-open");
+						return;
+					}
+					row.classList.add("wh-srow-open");
+					det.textContent = "（加载中…）";
+					det.classList.add("wh-det-on");
+					apiEntry(e.id).then(function (text) {
+						var head2 = "📌 " + e.id + " · " + (e.title || "") + "\n类别 " + e.category + "｜出现 " + e.occurrences + " 次｜最近 " + (e.lastSeen || "") +
+							(e.scope === "project" ? "｜适用项目 " + ((e.projects || []).join(", ") || "?") : "｜全局适用") + "\n对策：" + (e.rule || "") + "\n\n";
+						det.textContent = head2 + stripFrontmatter(text || "（条目文件缺失或不可读）");
+					});
+				});
+				return row;
+			}
+			function renderSolved() {
+				listB.textContent = "";
+				var s = solved;
+				if (!s || !s.stats) {
+					listB.appendChild(el("div", "wh-empty", "（加载失败，请点 ⟳ 重试）"));
+					return;
+				}
+				if (s.stats.active === 0 && s.stats.disabled === 0) {
+					listB.appendChild(el("div", "wh-empty", "（暂无已入库条目——审核候选入库后，这里出现「已解决」清单）"));
+					return;
+				}
+				if (s.stats.global > 0) {
+					listB.appendChild(el("div", "wh-sec", "🐳 全局区（适用所有工作区）"));
+					for (var gi = 0; gi < s.global.length; gi++) {
+						(function (grp) {
+							listB.appendChild(el("div", "wh-grp", grp.title));
+							for (var k = 0; k < grp.entries.length; k++) listB.appendChild(solvedRowEl(grp.entries[k], false));
+						})(s.global[gi]);
+					}
+				}
+				if (s.stats.project > 0) {
+					listB.appendChild(el("div", "wh-sec", "📁 项目区（仅对应项目适用 · 不进全局自动段）"));
+					for (var pi = 0; pi < s.projects.length; pi++) {
+						(function (grp) {
+							listB.appendChild(el("div", "wh-grp", "项目 " + grp.ws));
+							for (var k = 0; k < grp.entries.length; k++) listB.appendChild(solvedRowEl(grp.entries[k], false));
+						})(s.projects[pi]);
+					}
+				}
+				if (s.stats.disabled > 0) {
+					listB.appendChild(el("div", "wh-sec", "🛑 停用 " + s.stats.disabled));
+					for (var di = 0; di < s.disabled.length; di++) listB.appendChild(solvedRowEl(s.disabled[di], true));
+				}
 			}
 
 			// ---- 新会话载体（详细讨论 / 风险转人工共用）----
@@ -424,13 +601,13 @@ window.__ModuleLoader__.load({
 					btnOk.addEventListener("click", hideRiskAlert);
 					alertEl.classList.add("wh-alert-on");
 				}
-				if (open) renderRows();
+				if (open === "inbox") renderRows();
 				toast("⚠ " + r.id + " 自动处理被阻止：存在重大隐患");
 			}
 			function hideRiskAlert() {
 				riskFlags = {};
 				if (alertEl) alertEl.classList.remove("wh-alert-on");
-				if (open) renderRows();
+				if (open === "inbox") renderRows();
 			}
 			function watchRisk(sid, r) {
 				stopRiskWatch();
@@ -500,23 +677,26 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- 事件与生命周期 ----
-			tab.addEventListener("click", function () { setOpen(!open); });
-			btnClose.addEventListener("click", function () { setOpen(false); });
+			tabA.addEventListener("click", function () { setMode(open === "inbox" ? null : "inbox"); });
+			tabB.addEventListener("click", function () { setMode(open === "solved" ? null : "solved"); });
+			btnClose.addEventListener("click", function () { setMode(null); });
+			btnCloseB.addEventListener("click", function () { setMode(null); });
 			btnRefresh.addEventListener("click", function () { renderRows(); refresh(false); });
+			btnRefreshB.addEventListener("click", function () { renderSolved(); refreshSolved(false); });
 			function onDocDown(ev) {
-				if (open && !box.contains(ev.target)) setOpen(false);
+				if (open && !box.contains(ev.target)) setMode(null);
 			}
 			function onKey(ev) {
-				if (ev.key === "Escape") setOpen(false);
+				if (ev.key === "Escape") setMode(null);
 			}
-			function onFocus() { refresh(true); }
-			function onVis() { if (!document.hidden) refresh(true); }
+			function onFocus() { refresh(true); refreshSolved(true); }
+			function onVis() { if (!document.hidden) { refresh(true); refreshSolved(true); } }
 			document.addEventListener("pointerdown", onDocDown, true);
 			window.addEventListener("keydown", onKey);
 			window.addEventListener("focus", onFocus);
 			document.addEventListener("visibilitychange", onVis);
 			timer = setInterval(function () {
-				if (!document.hidden) refresh(true);
+				if (!document.hidden) { refresh(true); refreshSolved(true); }
 			}, 30000);
 
 			ctx.effect(function () {
@@ -537,6 +717,7 @@ window.__ModuleLoader__.load({
 
 			applyState();
 			refresh(true);
+			refreshSolved(true);
 		}
 		//#endregion
 		exports.apply = apply;

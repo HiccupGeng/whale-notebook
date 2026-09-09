@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { CATEGORY_TITLES } = require('../core/schema.cjs');
 
 const HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const NB_DIR = process.env.DSH_WHALE_NB_DIR || path.join(HOME, 'whale-notebook');
@@ -107,6 +108,17 @@ function archiveDetail(id) {
 
 // ---- entries ----
 // 扫描 entries/*.md 的 frontmatter（最小解析，字段协议见 schema）
+function parseList(v) {
+  return String(v || '').replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+// YAML 双引号字符串去包裹（含 \" 转义；数组/裸值原样返回）
+function unquote(v) {
+  const s = String(v || '');
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
+    try { return JSON.parse(s); } catch { return s.slice(1, -1); }
+  }
+  return s;
+}
 function listEntries() {
   if (!fs.existsSync(P.entries)) return [];
   const out = [];
@@ -119,7 +131,7 @@ function listEntries() {
     const m = raw.match(/^---\n([\s\S]*?)\n---/);
     if (m) for (const line of m[1].split('\n')) {
       const kv = line.match(/^([A-Za-z]+):\s*(.*)$/);
-      if (kv) fm[kv[1]] = kv[2];
+      if (kv) fm[kv[1]] = unquote(kv[2]);
     }
     out.push({
       file: p,
@@ -127,11 +139,13 @@ function listEntries() {
       title: fm.title || '',
       category: fm.category || 'other',
       status: fm.status || 'active',
+      scope: fm.scope === 'project' ? 'project' : 'global', // v0.4：缺省/旧条目 = global（零迁移）
+      projects: parseList(fm.projects),                      // v0.4：scope=project 时的适用项目白名单
       occurrences: parseInt(fm.occurrences, 10) || 1,
       firstSeen: fm.firstSeen || '',
       lastSeen: fm.lastSeen || '',
       rule: fm.rule || '',
-      workspaces: String(fm.workspaces || '').replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean),
+      workspaces: parseList(fm.workspaces),
       updated: fm.updated || fm.created || '',
     });
   }
@@ -143,26 +157,83 @@ function nextEntryId(entries) {
   for (const e of entries) { const n = parseInt(String(e.id).replace(/^E/, ''), 10); if (n > max) max = n; }
   return 'E' + String(max + 1).padStart(3, '0');
 }
+// 按编号读条目文件全文（只读；E### 文件名 = id-slug.md）
+function readEntryText(id) {
+  if (!/^E\d{3}$/.test(id) || !fs.existsSync(P.entries)) return null;
+  for (const f of fs.readdirSync(P.entries)) {
+    if (!f.endsWith('.md')) continue;
+    if (f === id + '.md' || f.startsWith(id + '-')) {
+      try { return fs.readFileSync(path.join(P.entries, f), 'utf8'); } catch { return null; }
+    }
+  }
+  return null;
+}
 
-// ---- INDEX.md（重建入口，内容规范与 skill 一致）----
+// ---- INDEX.md（v0.4 语义升级为「已解决墙」：全局区/项目区 × 类别分组 + 停用收尾）----
+// 轻口径：入库 = 已处理；项目级条目不进全局自动段（B1），在项目区按适用项目查阅。
 function buildIndexMd(entries) {
   const active = entries.filter((e) => e.status === 'active');
-  const byCat = {};
-  for (const e of active) (byCat[e.category] = byCat[e.category] || []).push(e);
+  const disabled = entries.filter((e) => e.status !== 'active');
+  const global = active.filter((e) => e.scope !== 'project');
+  const proj = active.filter((e) => e.scope === 'project');
+  const esc = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const byNewest = (a, b) => (String(b.lastSeen || '')).localeCompare(String(a.lastSeen || '')) || String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+  const tableHeader = () => ['| 编号 | 标题 | 对策（rule） | 次数 | 最近 |', '|---|---|---|---|---|'];
   const L = [];
-  L.push('# 鲸鱼小本本 · 经验索引（INDEX）');
+  L.push('# 鲸鱼小本本 · 已解决墙（INDEX）');
   L.push('');
-  L.push(`> 生成时间: ${new Date().toISOString().slice(0, 10)} ｜ 条目总数: ${active.length}（另有 disabled ${entries.length - active.length}）`);
+  L.push('> 轻口径：入库 = 已处理（已有对策），未做复发验证。项目级条目（scope: project）按 B1 语义不进全局自动段，按项目在「项目区」查阅；处置史见 archive/。');
+  L.push(`> 生成: ${new Date().toISOString().slice(0, 10)} ｜ active ${active.length}（全局 ${global.length} + 项目级 ${proj.length}）｜ 停用 ${disabled.length}`);
   L.push('');
-  for (const [cat, list] of Object.entries(byCat).sort((a, b) => b[1].length - a[1].length)) {
-    L.push(`## ${cat}（${list.length}）`);
+  if (!active.length) {
+    L.push('（暂无 active 条目——审核候选入库后，此处出现「已解决」内容）');
+    return L.join('\n') + '\n';
+  }
+  L.push('## 🐳 全局区（适用所有工作区 · 对策经 AGENTS 自动段注入每个会话）');
+  L.push('');
+  if (!global.length) {
+    L.push('（暂无全局条目）');
+  } else {
+    const catOrder = Object.keys(CATEGORY_TITLES);
+    const gByCat = {};
+    for (const e of global) (gByCat[e.category] = gByCat[e.category] || []).push(e);
+    const order = catOrder.filter((c) => gByCat[c]).concat(Object.keys(gByCat).filter((c) => !catOrder.includes(c)));
+    for (const cat of order) {
+      const list = gByCat[cat].slice().sort(byNewest);
+      L.push(`### ${CATEGORY_TITLES[cat] || cat}（${list.length}）`);
+      L.push('');
+      L.push(...tableHeader());
+      for (const e of list) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(e.rule)} | ${e.occurrences} | ${e.lastSeen} |`);
+      L.push('');
+    }
+  }
+  L.push('## 📁 项目区（项目级条目，按适用项目查阅 · 不进全局自动段）');
+  L.push('');
+  if (!proj.length) {
+    L.push('（暂无项目级条目）');
+  } else {
+    const byWs = {};
+    for (const e of proj) {
+      const wss = (e.projects && e.projects.length) ? e.projects : ['?'];
+      for (const ws of wss) (byWs[ws] = byWs[ws] || []).push(e);
+    }
+    for (const ws of Object.keys(byWs).sort()) {
+      const list = byWs[ws].slice().sort(byNewest);
+      L.push(`### ${ws}（${list.length}）`);
+      L.push('');
+      L.push(...tableHeader());
+      for (const e of list) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(e.rule)} | ${e.occurrences} | ${e.lastSeen} |`);
+      L.push('');
+    }
+  }
+  if (disabled.length) {
+    L.push('## 🛑 停用（disabled · 曾入库后停用/忘掉）');
     L.push('');
-    L.push('| 编号 | 标题 | 次数 | 工作区 | 最近 |');
-    L.push('|---|---|---|---|---|');
-    for (const e of list) L.push(`| ${e.id} | ${e.title} | ${e.occurrences} | ${e.workspaces.slice(0, 3).join(',')} | ${e.lastSeen} |`);
+    L.push('| 编号 | 标题 | 类别 | 最近 |');
+    L.push('|---|---|---|---|');
+    for (const e of disabled.slice().sort(byNewest)) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(CATEGORY_TITLES[e.category] || e.category)} | ${e.lastSeen} |`);
     L.push('');
   }
-  if (!active.length) L.push('（暂无 active 条目）');
   return L.join('\n') + '\n';
 }
 
@@ -172,5 +243,5 @@ module.exports = {
   readSettings, readState, emptyState, writeState,
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows,
   detailFilePath, writeDetail, readDetail, archiveDetail,
-  listEntries, nextEntryId, buildIndexMd,
+  listEntries, nextEntryId, readEntryText, buildIndexMd,
 };

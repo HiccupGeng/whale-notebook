@@ -34,7 +34,8 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `PROJECT-INTRO.md` | ★本文：项目总览 |
 | `README.md` | 给"人"的目录说明与隐私策略 |
 | `inbox.md` | ★待审核箱：候选行 `\| C### \| 类别 \| 次数 \| 工作区 \| 现象(打码) \| 时间 \|` |
-| `entries/` | 已入库经验条目 `E###-*.md`（frontmatter + 现象/根因/对策/验证） |
+| `entries/` | 已入库经验条目 `E###-*.md`（frontmatter + 现象/根因/对策/验证；v0.4 加 `scope` global\|project + `projects` 适用白名单） |
+| `INDEX.md` | ★已解决墙（v0.4：全局区/项目区 × 类别 + 停用；生成器 `repo.buildIndexMd`，`scripts/mine.cjs --wall` 预览；轻口径：入库=已处理） |
 | `archive/` | 已处理候选归档（溯源；`archive/details/` = 候选详情随行归档） |
 | `details/` | ★v0.3 候选详情 sidecar：`C###.md`（一句话/类别/源会话引用 ≤3/打码摘录 ≤600 字，超长注明源日志路径；删除候选随行进 `archive/details/`） |
 | `state.json` | 增量状态：`lastScan`、`seenFingerprints[]`（只存指纹）、`nextCandidateId` |
@@ -71,8 +72,8 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 ## 4. 数据不变式（改数据前必读）
 
 - **inbox 行**：`| C### | 类别 | 次数 | 工作区 | 现象(打码,≤120字) | 时间 |`；类别键见 `plugin/src/core/schema.cjs` `CATEGORY_TITLES`（encoding/stale-fs/sandbox-*/approval/tool-mode/git-net/secret/session-state/data-access/long-session/timeout/model-api/file-missing/port-busy/other）。
-- **条目 frontmatter**：id/title/category/status(active|disabled)/occurrences/firstSeen/lastSeen/workspaces/rule/created/updated/sources——模板见 `schema.cjs renderEntryFile`。
-- **规则行**：`- 【类别】对策一句话`，进 AGENTS 自动段按 occurrences 排序、最多 `maxRulesInAgents`(12) 条。
+- **条目 frontmatter**：id/title/category/status(active|disabled)/**scope(global|project)**/**projects(适用白名单)**/occurrences/firstSeen/lastSeen/workspaces/rule/created/updated/sources——模板见 `schema.cjs renderEntryFile`（scope 缺省=global，旧条目零迁移）。
+- **规则行**：`- 【类别】对策一句话`，进 AGENTS 自动段按 occurrences 排序、最多 `maxRulesInAgents`(12) 条；**v0.4 B1：自动段只收 scope=global 条目**，项目级永不进全局注入（去向见状态行与 INDEX 已解决墙项目区）。
 - **AGENTS 自动段**：整段由生成器维护（`plugin/src/inject/agents.cjs`），**勿手改**（会被下次入库刷新覆盖）。
 - **唯一读写入口**：`plugin/src/store/repo.cjs`（路径常量 + 原子写）；`plugin/src/core/privacy.cjs` 是打码/指纹唯一出口。
 - **采集口径（v2.0 起）**：只收**用户报障类消息**的失败/特征事件 + 工具失败信号；助手叙述回声已移除（自引用污染）。
@@ -82,26 +83,26 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 | 层 | 模块 | 职责 | 关键导出 |
 |---|---|---|---|
-| 领域 | `core/schema.cjs` | 类别表/设置默认/AGENTS 标记/inbox 行/条目模板/规则行 | `CATEGORY_TITLES`、`AGENTS_MARK`、`inboxRow`、`renderEntryFile`、`ruleLine` |
+| 领域 | `core/schema.cjs` | 类别表/适用范围 SCOPE_TITLES/设置默认/AGENTS 标记/inbox 行/条目模板(scope+projects)/规则行 | `CATEGORY_TITLES`、`SCOPE_TITLES`、`AGENTS_MARK`、`inboxRow`、`renderEntryFile`、`ruleLine` |
 | 领域 | `core/privacy.cjs` | 打码 redact(压白,兼容不变式) / redactLines(保留行结构) / 指纹 hash36 / 规范 canonText（隐私唯一出口） | `redact`、`redactLines`、`hash36`、`canonText` |
 | 领域 | `core/util.cjs` | fmtTime 等小工具 | `fmtTime` |
 | 领域 | `core/summarize.cjs` | v0.3 现象一句话 oneLiner（纯规则行级清洗 + 句界截断 ≤90 字） | `oneLiner` |
-| 数据 | `store/repo.cjs` | 路径常量 + settings/state/inbox/entries/INDEX/details 读写（原子替换；移除候选联动归档 detail） | `P`(路径)、读写函数、`listEntries`、`writeDetail` |
+| 数据 | `store/repo.cjs` | 路径常量 + settings/state/inbox/entries(scope/projects 解析+去引号)/INDEX 已解决墙生成/readEntryText/details 读写（原子替换；移除候选联动归档 detail） | `P`(路径)、读写函数、`listEntries`、`readEntryText`、`buildIndexMd`、`writeDetail` |
 | 记录 | `collector/decoder.cjs` | zstd 多帧 JSONL 会话解码（Node≥22） | `decode` |
 | 记录 | `collector/patterns.cjs` | 坑特征词典（展示/硬拦共用） | 特征表 |
 | 记录 | `collector/scanner.cjs` | 单会话事件抽取（失败/特征；自引用与框架排除） | `scanSession` |
 | 记录 | `collector/engine.cjs` | 扫描→指纹去重→聚簇→check 追加候选（现象一句话）+ 详情 sidecar（源引用/600 字摘录）；--stats/--prewarm | `runScan`、`buildDetailMd` |
-| 记录 | `collector/cli.cjs` | CLI 分发（含 --render-rules 预览自动段正文） | `run` |
-| 生效 | `inject/agents.cjs` | AGENTS 自动段正文生成（排序/上限/尾注/标记内替换）；落盘由 agent 用 edit 工具执行 | `buildSectionBody`、`applyToText` |
+| 记录 | `collector/cli.cjs` | CLI 分发（--render-rules 预览自动段；v0.4 --wall 预览已解决墙全文） | `run` |
+| 生效 | `inject/agents.cjs` | AGENTS 自动段正文生成（v0.4 B1：只收 scope=global；排序/上限/尾注/标记内替换）；落盘由 agent 用 edit 工具执行 | `buildSectionBody`、`applyToText` |
 | 审核 | `review/commit.cjs` | 计划式入库纯函数（展示→确认后由 agent 落盘） | `planCommit` |
-| 展示 | `ui/viewmodel.cjs` | 待审/统计视图模型（UI 唯一数据入口） | `inboxViewModel` 等 |
-| 展示 | `ui/server.cjs` | 决策箱面板 host API 纯逻辑（list / detail 读取 / delete→归档，幂等） | `listPayload`、`detailPayload`、`deleteCandidate` |
+| 展示 | `ui/viewmodel.cjs` | 待审/统计/**已解决墙**视图模型（UI 唯一数据入口） | `inboxViewModel`、`statsViewModel`、`solvedViewModel` |
+| 展示 | `ui/server.cjs` | 决策箱面板 host API 纯逻辑（list / detail 读取 / delete→归档 / v0.4 solved 聚合 / entry 全文，幂等） | `listPayload`、`detailPayload`、`deleteCandidate`、`solvedPayload`、`entryPayload` |
 | 展示 | `ui/contracts.md` | UI/桌宠接入契约与事件平面 | — |
-| 入口 | `lib/index.js` | cordis 插件入口 host half：注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`POST /whale/inbox/delete` | `apply` |
-| 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作；v0.3：红 ✕ / 判定表模板 / detail 预取 / `[WHALE-RISK]` 观察→红色警示条→一键转人工讨论） | `apply`（browser） |
+| 入口 | `lib/index.js` | cordis 插件入口 host half：注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`GET /whale/solved`、`GET /whale/entry`、`POST /whale/inbox/delete` | `apply` |
+| 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作；v0.3：红 ✕ / 判定表模板 / detail 预取 / `[WHALE-RISK]` 观察→红色警示条→一键转人工讨论；v0.4：**双卡** 待审箱｜已解决墙——全局区/项目区分组、行点击拉全文展开） | `apply`（browser） |
 | 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 profiles/web/cordis.patch.yml） | — |
 | ★部署 | `scripts/deploy-web.cjs` | 复制包 → profile node_modules + patch loader 行（幂等 dry/apply/undo/check；生效需重启 dsh web） | — |
-| 测试 | `src/ui/server.selftest.cjs`(23) + `src/core/privacy|summarize.selftest.cjs`(20) + `src/collector/engine|e2e.selftest.cjs`(21, zstd 全链) + `scripts/bundle-smoke.cjs` | v0.3.0 共 5 套件 64 断言 + bundle 桩，全绿 | — |
+| 测试 | `src/ui/server.selftest.cjs`(45) + `src/core/privacy|summarize.selftest.cjs`(20) + `src/collector/engine|e2e.selftest.cjs`(21, zstd 全链) + `scripts/bundle-smoke.cjs` | v0.4.0 共 5 套件 86 断言 + bundle 桩（含 v0.4 结构断言），全绿 | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单） | — |
 
@@ -139,7 +140,8 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 - **v2.0**（已完成）：插件化模块重构（六模块 + 单向依赖；行为/数据不变式兼容）。
 - **v2.0.x 当前**：第 0 功能「生命周期」v0.1 完成（lifecycle 工具 + manifest + 演练）；GitHub 私有库建立 + 一键同步工具。
 - **v2.1 + v0.3.0（代码与部署已完成，待用户重启 GUI 生效）**：决策箱悬浮侧边面板 —— host half（`/whale/*` API）+ browser half（client-plugin，零依赖 bundle）+ `deploy-web.cjs` 一键部署；v0.3.0 增强：现象行一句话、候选详情 sidecar（`details/C###.md` + `GET /whale/inbox/detail`）、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 上报 → 面板红色警示条 + 一键转人工讨论。设计见 `docs/2026_09_09_18_…面板设计.md` 与 `docs/2026_09_09_22_…v0.3实施计划.md`。**生效需用户择机重启 GUI**。
-- **未来**：失败事件实时采集（订阅 tool/result、agent/request-error）；会话平面挂载；面板增强（桌宠形态/事件推送，契约已备）。
+- **v0.4.0（代码与部署已完成，随重启同批生效）**：已解决墙 + 两级分类 —— 条目 frontmatter 增 `scope`（global|project）+`projects` 白名单（缺省 global 零迁移）；**B1**：AGENTS 自动段只收全局规则，项目级不进全局注入（状态行注明去向）；A1 文档墙 INDEX.md（全局区/项目区 × 类别 + 停用收尾）+ A2 面板「已解决」卡（`GET /whale/solved`、`GET /whale/entry?id=E###`，行点击展开全文）。决策：①轻口径（入库=已处理）②A1+A2 一期都做 ③先 B1 后 B2（本次 B1；B2 项目级注入 = 三期试点）。设计见 `docs/2026_09_09_23_…需求梳理.md` 与 `docs/2026_09_09_23_…v0.4实施计划.md`。
+- **未来**：失败事件实时采集（订阅 tool/result、agent/request-error）；会话平面挂载；B2 项目级自动注入（项目根 AGENTS.md，逐项目知情试点）；复发检测（二期，engine/state 扩展）；面板增强（桌宠形态/事件推送，契约已备）。
 
 ## 9. 文档导航（docs/，均为设计记录）
 
@@ -151,15 +153,17 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `2026_09_09_17_whale-notebook生态调研核实与定位对比.md` | 生态核实（14 项目）+ 四维差异 + 结论 |
 | `2026_09_09_18_whale-notebook决策箱面板设计.md` | v2.1 决策箱面板：机制勘察/架构/契约/部署验收 |
 | `2026_09_09_22_whale-notebook决策箱v0.3实施计划.md` | v0.3.0：一句话现象+详情 sidecar / 红✕ / 自动判定表与 RISK 上报 / P0–P5 与验收 |
+| `2026_09_09_23_whale-notebook已解决问题展示与分类需求梳理.md` | 需求梳理：已解决墙 A1/A2、全局/项目分类、B1/B2/B3 对比、决策与答疑记录 |
+| `2026_09_09_23_whale-notebook已解决墙与分类v0.4实施计划.md` | v0.4.0：scope/projects 数据模型 + INDEX 已解决墙 + 面板双卡 + B1 + 测试验收 |
 
 ## 10. 常用命令速查
 
 ```text
-node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--prewarm|--stats|--render-rules   # 采集 CLI(v1 壳)
+node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--prewarm|--stats|--render-rules|--wall   # 采集 CLI(v1 壳; --wall=v0.4 已解决墙预览)
 node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs                                # 生命周期沙盒自测(66 PASS)
 node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check|install|uninstall …    # 生命周期工具
 node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--undo|--check]      # 决策箱面板部署(改后需重启 dsh web)
-node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs                           # 面板 host 逻辑沙盒自测(23 PASS)
+node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs                           # 面板 host 逻辑沙盒自测(45 PASS, 含 v0.4 墙/B1)
 node ~/.dsh/whale-notebook/plugin/src/core/privacy.selftest.cjs | summarize.selftest.cjs  # 打码出口/一句话(10+10)
 node ~/.dsh/whale-notebook/plugin/src/collector/engine.selftest.cjs | e2e.selftest.cjs    # detail 协议 / zstd 全链(10+11)
 node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs                             # client bundle 桩检查
@@ -174,5 +178,6 @@ node <repo>/tools/sync-release.cjs                                              
 3. 任何**写**数据：先用 repo 层纯函数/生成器出计划 → **展示给用户** → 用户确认 → 才落盘；AGENTS 自动段改动用 edit 工具替换标记区内整段（保证 agent-instructions 观测到变更）。
 4. 私密内容处理走 `core/privacy.cjs`；拿不准的文本一律先打码。
 5. 涉及安装/卸载/删除 → 走 `lifecycle/cli.cjs`（干跑 → 展示成果清单 → 确认 → --apply），绝不手工乱删。
-6. 决策箱面板（GUI 右缘悬浮件）：列表只读 inbox（现象=一句话）；详情在 `details/C###.md`（v0.3 起新候选自动生成，旧候选无）；「删除」✕=移入 archive（可恢复，detail 随行归档）；⚡自动处理只允许「补全型小修」自动执行，重大隐患（删除/动 DSH 结构/影响产出等）禁止并上报 `[WHALE-RISK]`，红色警示条可一键转人工讨论；面板部署/回退/升级一律 `plugin/scripts/deploy-web.cjs`（改 client.js 后需重启 dsh web）。
-7. 改完运行源码/文档 → `node tools\sync-release.cjs` 同步到 GitHub 库（在镜像库目录下执行）。
+6. 决策箱面板（GUI 右缘悬浮件）：**双卡**——待审箱（只读 inbox，现象=一句话；详情在 `details/C###.md`（v0.3 起新候选自动生成，旧候选无）；「删除」✕=移入 archive（可恢复，detail 随行归档）；⚡自动处理只允许「补全型小修」自动执行，重大隐患（删除/动 DSH 结构/影响产出等）禁止并上报 `[WHALE-RISK]`，红色警示条可一键转人工讨论）与 已解决墙（✅ 有条目才出现；轻口径：入库=已处理；全局区/项目区，行点击展开条目全文）；面板部署/回退/升级一律 `plugin/scripts/deploy-web.cjs`（改 client.js 后需重启 dsh web）。
+7. 条目适用范围（v0.4）：入库时给用户「拟 scope」建议并确认——global 进全局自动段；project 级条目带 `projects` 白名单、**永不进全局自动段**（B1），只在 INDEX.md 已解决墙项目区/面板已解决卡按项目查阅；想回答「解决过哪些问题」read INDEX.md 即可。
+8. 改完运行源码/文档 → `node tools\sync-release.cjs` 同步到 GitHub 库（在镜像库目录下执行）。

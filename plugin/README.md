@@ -1,6 +1,6 @@
-# dsh-whale-notebook 插件包（v0.3.0：双半插件 · 决策箱面板已就绪）
+# dsh-whale-notebook 插件包（v0.4.0：双半插件 · 决策箱双卡 = 待审箱 + 已解决墙）
 
-鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。
+鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。**v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）**。
 
 ## 模块地图
 
@@ -8,8 +8,8 @@
 plugin/
 ├─ package.json            # @deepseek-ai/dsh-whale-notebook (type: module; dsh.client 声明)
 ├─ cordis.patch.yml        # 主机平面挂载模板(参考；现场行由 deploy-web.cjs 管理)
-├─ lib/index.js            # 插件入口(host half: /whale/inbox|detail|delete 注册, v0.3)
-├─ lib/client.js           # 浏览器半边(决策箱悬浮面板 bundle; v0.3: 红✕/判定表/RISK 警示, __ModuleLoader__ 零依赖)
+├─ lib/index.js            # 插件入口(host half: /whale/inbox|detail|solved|entry|delete 注册, v0.4)
+├─ lib/client.js           # 浏览器半边(决策箱悬浮面板 bundle; v0.3: 红✕/判定表/RISK 警示; v0.4: 双卡 待审+已解决, __ModuleLoader__ 零依赖)
 ├─ manifest.json           # ★包内默认清单(生命周期: 足迹=卸载白名单, schema v1)
 ├─ lifecycle/              # ★自举生命周期模块(第 0 功能: 安装/卸载/清单, 仅 node 内建)
 │  ├─ cli.cjs              # status/check/install/uninstall detach|remove|purge
@@ -27,33 +27,35 @@ plugin/
    │  ├─ util.cjs          # fmtTime
    │  ├─ privacy.cjs       # 打码 redact(压白, 兼容不变式)/redactLines(保留行结构) / 指纹 hash36 / 规范 canonText（隐私唯一出口）
    │  ├─ summarize.cjs     # v0.3 现象一句话 oneLiner(纯规则行级清洗+句界截断)
-   │  └─ schema.cjs        # 类别表/设置默认/AGENTS 标记/inbox 行与条目模板/规则行
+   │  └─ schema.cjs        # 类别表/SCOPE_TITLES(global|project)/设置默认/AGENTS 标记/inbox 行与条目模板(scope+projects)/规则行
    ├─ store/               # ★数据层(单一事实源; 未来可换 sqlite/远程)
-   │  └─ repo.cjs          # 路径常量 + settings/state/inbox/entries/INDEX/details(C###.md) 读写, 移除候选联动归档
+   │  └─ repo.cjs          # 路径常量 + settings/state/inbox/entries(scope/projects 解析, 去引号)/INDEX=已解决墙生成器/readEntryText/details(C###.md) 读写, 移除候选联动归档
    ├─ collector/           # ★记录层(采集)
    │  ├─ decoder.cjs       # zstd 多帧 JSONL 解码
    │  ├─ patterns.cjs      # 坑特征词典(展示/硬拦共用)
    │  ├─ scanner.cjs       # 单会话事件抽取(失败/特征, 自引用与框架排除)
    │  ├─ engine.cjs        # 扫描→指纹→聚簇→(check)追加待审行+详情 sidecar(源引用/600 字摘录); --stats/--prewarm
-   │  └─ cli.cjs           # CLI 分发(含 --render-rules)
+   │  └─ cli.cjs           # CLI 分发(含 --render-rules、v0.4 --wall 打印已解决墙全文)
    ├─ inject/              # ★生效层(L1 AGENTS 自动段; 未来: system-prompt 段/硬拦守卫)
-   │  └─ agents.cjs        # 自动段正文生成器(规则行排序/上限/尾注/标记内替换)
+   │  └─ agents.cjs        # 自动段正文生成器(v0.4 B1: 只收 scope=global; 规则行排序/上限/尾注/标记内替换)
    ├─ review/              # ★审核层(人工确认闭环)
    │  └─ commit.cjs        # 计划式入库 planCommit(纯函数) + 候选行选取
    └─ ui/                  # ★展示/外观层(已落地: 决策箱面板)
       ├─ contracts.md      # 接入契约(视图模型/事件/推荐平面)
-      ├─ viewmodel.cjs     # inboxViewModel/statsViewModel(UI 唯一数据入口)
-      ├─ server.cjs        # host API 纯逻辑(list/detail 读取/delete→归档; 幂等; http 适配在 lib/index.js)
-      └─ server.selftest.cjs # server.cjs 沙盒单测(临时 DSH_HOME)
+      ├─ viewmodel.cjs     # inboxViewModel/statsViewModel/solvedViewModel(UI 唯一数据入口; 墙形状=全局区/项目区/停用)
+      ├─ server.cjs        # host API 纯逻辑(list/detail/delete + v0.4 solved/entry; 幂等; http 适配在 lib/index.js)
+      └─ server.selftest.cjs # server.cjs 沙盒单测(临时 DSH_HOME; v0.4 含墙/agents B1 断言)
 ```
 
 旧文件 → 新归属：`scripts/mine.cjs`=兼容薄壳（转发 cli.cjs）；`scripts/redact.test.cjs`=core/privacy 测试；数据文件(inbox/entries/state/settings/INDEX/archive)不动。
 
-## 部署：决策箱面板（v0.3.0 已实现）
+## 部署：决策箱面板（v0.4.0 已实现）
 
-设计文档：项目 `docs/2026_09_09_18_whale-notebook决策箱面板设计.md`（v2.1 基础）+ `docs/2026_09_09_22_whale-notebook决策箱v0.3实施计划.md`。浏览器半边=悬浮侧边面板（待审列表 + ⚡自动处理/💬详细讨论/✕删除；现象=一句话，hover 可展开三动作）；host 半边注册 `GET /whale/inbox`、`GET /whale/inbox/detail`（详情 sidecar）与 `POST /whale/inbox/delete`。
+设计文档：项目 `docs/2026_09_09_18_whale-notebook决策箱面板设计.md`（v2.1 基础）+ `docs/2026_09_09_22_whale-notebook决策箱v0.3实施计划.md` + `docs/2026_09_09_23_whale-notebook已解决墙与分类v0.4实施计划.md`。浏览器半边=悬浮侧边面板**双卡**：待审箱（⚡自动处理/💬详细讨论/✕删除）+ 已解决墙（全局区/项目区分组，行点击展开条目全文）；host 半边注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`GET /whale/solved`、`GET /whale/entry` 与 `POST /whale/inbox/delete`。
 
 v0.3 语义要点：现象行 = 规则精炼一句话（堆栈/`Error:` 清洗，≤90 字）；候选详情存 `~/.dsh/whale-notebook/details/C###.md`（源会话引用 + 打码摘录 ≤600 字，删除候选时随行进 `archive/details/`）；删除按钮=红色 ✕（移入归档，可恢复）；⚡自动处理模板内嵌判定表（只读诊断；补全型小修——不删除/不碰 DSH 结构/影响域封闭/可自验证——可自动执行，先预告后动手；禁区一律禁止，回复固定行 `[WHALE-RISK]`），面板轮询会话消息识别该标记后弹红色警示条并支持「转人工讨论」一键开新会话。
+
+v0.4 语义要点：条目 frontmatter 新增 `scope: global|project` + `projects: [项目…]`（缺省/旧条目 = global，零迁移；判定为语义判断，入库时 AI 建议 + 用户确认）；**B1**：AGENTS 自动段只收 scope=global（项目级永不注入全局，状态行注明去向）；已解决墙 = 轻口径（入库即已处理）——A1 文档墙（INDEX.md 升级：全局区/项目区 × 类别 + 停用收尾，`mine.cjs --wall` 预览）与 A2 面板「已解决」卡同源（viewmodel.solvedViewModel → `/whale/solved`；行详情 `/whale/entry?id=E###`）。
 
 ```powershell
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run
@@ -65,7 +67,7 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply
 - **生效需重启 dsh web**（loader 行集启动时固定；重启会中断在线会话，历史已持久化可恢复）→ 重启后刷新页面即出现面板。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可。
 - 改动 bundle/代码后：deploy `--apply` → 重启。
-- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 23 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|e2e.selftest.cjs`（engine 10 + zstd 全链 11 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩）——共 5 套件 64 断言 + bundle 桩，全绿（2026-09-09 v0.3.0）。
+- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 45 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|e2e.selftest.cjs`（engine 10 + zstd 全链 11 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4 结构断言）——共 5 套件 86 断言 + bundle 桩，全绿（2026-09-09 v0.4.0）。
 
 ### 风险与前提（务必先读）
 

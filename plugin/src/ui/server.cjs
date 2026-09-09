@@ -5,9 +5,10 @@
 'use strict';
 const fs = require('fs');
 const repo = require('../store/repo.cjs');
-const { inboxViewModel } = require('./viewmodel.cjs');
+const { inboxViewModel, solvedViewModel } = require('./viewmodel.cjs');
 
 const ID_RE = /^C\d{3}$/;
+const EID_RE = /^E\d{3}$/;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 // 本地时间 'YYYY-MM-DD HH:mm'（+08 环境下的用户可读处置戳）
@@ -23,6 +24,20 @@ function ensureArchiveDir() {
 function listPayload() {
   const vm = inboxViewModel();
   return { ok: true, pending: vm.pending, rows: vm.rows };
+}
+
+// v0.4 GET /whale/solved：已解决墙聚合（轻口径：入库 = 已处理；只读 entries frontmatter）
+// 形状与 solvedViewModel 一致：stats / global[] / projects[] / disabled[]
+function solvedPayload() {
+  return Object.assign({ ok: true }, solvedViewModel());
+}
+
+// v0.4 GET /whale/entry?id=E###：条目全文（只读 entries/ 文件；行展开详情用）
+function entryPayload(id) {
+  if (!EID_RE.test(id)) return { ok: false, error: `非法编号: ${id}（应为 E###）` };
+  const text = repo.readEntryText(id);
+  if (text === null) return { ok: false, error: `条目 ${id} 不存在（已删除？）` };
+  return { ok: true, id, text };
 }
 
 // GET /whale/inbox/detail?id=C###：读候选详情 sidecar（只读本地文件；旧候选/已归档 → 无详情）
@@ -51,4 +66,4 @@ function deleteCandidate({ id, now }) {
   return { ok: true, removed, id, archived: true };
 }
 
-module.exports = { ID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate };
+module.exports = { ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate, solvedPayload, entryPayload };

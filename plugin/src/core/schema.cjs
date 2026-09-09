@@ -21,6 +21,12 @@ const CATEGORY_TITLES = {
   other: '其他',
 };
 
+// v0.4 适用范围维度（与 category 正交；判定为语义判断：入库审核时 AI 建议 + 用户确认）
+const SCOPE_TITLES = {
+  global: '全局适用',
+  project: '项目级',
+};
+
 const SETTINGS_DEFAULTS = {
   autoCollect: true,
   denylistWorkspaces: [],
@@ -42,12 +48,15 @@ function inboxRow(candidateId, row) {
 const INBOX_HEADER = '| 编号 | 类别 | 次数 | 工作区 | 现象（一行，已打码） | 时间 |\n|---|---|---|---|---|---|';
 
 // 经验条目 frontmatter 模板（review/commit 用）
+// v0.4 扩展：scope（global|project，缺省=global 兼容旧条目）+ projects（scope=project 时的适用项目白名单，可多项目）
 function renderEntryFile(entry) {
   return `---
 id: ${entry.id}
 title: ${entry.title}
 category: ${entry.category}
 status: ${entry.status || 'active'}
+scope: ${entry.scope || 'global'}
+projects: [${(entry.projects || []).join(', ')}]
 occurrences: ${entry.occurrences}
 firstSeen: ${entry.firstSeen}
 lastSeen: ${entry.lastSeen}
@@ -76,13 +85,14 @@ ${entry.verification || '(待补充)'}
 `;
 }
 
-// 规则行协议：进入 AGENTS.md 自动段的形态（一条 = 一行）
+// 规则行协议：进入 AGENTS.md 自动段的形态（一条 = 一行；v0.4 起自动段只收 scope=global 条目）
 function ruleLine(entry) {
   return `- 【${entry.category}】${entry.rule}`;
 }
 
 module.exports = {
   CATEGORY_TITLES,
+  SCOPE_TITLES,
   SETTINGS_DEFAULTS,
   AGENTS_MARK,
   INBOX_HEADER,

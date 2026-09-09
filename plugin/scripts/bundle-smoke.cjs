@@ -27,4 +27,9 @@ try {
   out = loaded.factory(function (spec) { throw new Error('bundle 意外 require 了模块: ' + spec); });
 } catch (e) { throw new Error('factory 执行失败: ' + e.message); }
 if (!out || typeof out.apply !== 'function') throw new Error('exports.apply 缺失');
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply);
+// v0.4 内容断言：新端点调用与双卡 DOM 结构必须在 bundle 源码中（防手写 bundle 漂移）
+const REQUIRED = ['/whale/solved', '/whale/entry?id=', 'wh-card-solved', 'wh-badge2', 'refreshSolved', '已解决'];
+for (const s of REQUIRED) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.4 结构: ' + s);
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4 结构完整');

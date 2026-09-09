@@ -22,6 +22,7 @@ fs.writeFileSync(path.join(nb, 'inbox.md'), HEADER + LINES + '\n', 'utf8');
 
 const repo = require('../store/repo.cjs');
 const server = require('./server.cjs');
+const agents = require('../inject/agents.cjs');
 let fails = 0;
 function check(name, cond, extra) {
   if (cond) { console.log('PASS ' + name); }
@@ -81,6 +82,80 @@ try {
   check('全部归档同一文件', archives3.length === 1 && (fs.readFileSync(path.join(nb, 'archive', archives3[0]), 'utf8').match(/面板删除/g) || []).length === 4, archives3);
 
   check('localStamp 格式', server.localStamp(new Date('2026-09-10T07:05:06+08:00')) === '2026-09-10 07:05', server.localStamp(new Date('2026-09-10T07:05:06+08:00')));
+
+  // ============ v0.4 已解决墙：条目 roundtrip / solvedPayload / entryPayload / buildIndexMd ============
+  const { renderEntryFile } = require('../core/schema.cjs');
+  const entriesDir = path.join(nb, 'entries');
+  fs.mkdirSync(entriesDir, { recursive: true });
+  const mkEntry = (e) => fs.writeFileSync(path.join(entriesDir, `${e.id}-${e.slug}.md`), renderEntryFile(e), 'utf8');
+  mkEntry({
+    id: 'E001', slug: 'enc', title: '中文编码转义', category: 'encoding', status: 'active', scope: 'global', projects: [],
+    occurrences: 5, firstSeen: '2026-08-17', lastSeen: '2026-09-01', workspaces: ['SandBox1', 'wsB'], rule: '命令与脚本不内联中文 | 走 UTF-8 文件引用', created: '2026-09-09', updated: '2026-09-09', sources: ['s1'],
+    symptom: '内联中文被破坏', rootCause: '控制台链路编码', actions: '改文件引用', verification: '重跑成功',
+  });
+  mkEntry({
+    id: 'E002', slug: 'pyenv', title: 'Python 环境路径', category: 'data-access', status: 'active', scope: 'project', projects: ['SandBox1'],
+    occurrences: 2, firstSeen: '2026-08-20', lastSeen: '2026-08-21', workspaces: ['SandBox1'], rule: '先查 PATH 再报环境缺失', created: '2026-09-09', updated: '2026-09-09', sources: ['s2'],
+    symptom: 'python 找不到', rootCause: '未配 PATH', actions: '配置路径', verification: '',
+  });
+  mkEntry({
+    id: 'E003', slug: 'multi', title: '多项目共用经验', category: 'stale-fs', status: 'active', scope: 'project', projects: ['SandBox1', 'wsB'],
+    occurrences: 3, firstSeen: '2026-08-18', lastSeen: '2026-08-30', workspaces: ['SandBox1', 'wsB'], rule: '编辑前先 read 最新', created: '2026-09-09', updated: '2026-09-09', sources: ['s3'],
+    symptom: 'stale read', rootCause: '缓存旧', actions: '先 read', verification: '',
+  });
+  mkEntry({
+    id: 'E004', slug: 'old', title: '已停用经验', category: 'other', status: 'disabled', scope: 'global', projects: [],
+    occurrences: 1, firstSeen: '2026-07-01', lastSeen: '2026-07-02', workspaces: ['SandBox1'], rule: '旧规则', created: '2026-09-09', updated: '2026-09-09', sources: ['s4'],
+    symptom: 'x', rootCause: 'y', actions: 'z', verification: '',
+  });
+  let es = repo.listEntries();
+  check('entries roundtrip scope/projects', es.length === 4 && es.find((e) => e.id === 'E001').scope === 'global' &&
+    es.find((e) => e.id === 'E002').scope === 'project' &&
+    JSON.stringify(es.find((e) => e.id === 'E003').projects) === JSON.stringify(['SandBox1', 'wsB']) &&
+    es.find((e) => e.id === 'E004').status === 'disabled', es.map((e) => [e.id, e.scope, e.projects]));
+  check('entry rule 去引号解析', es.find((e) => e.id === 'E001').rule === '命令与脚本不内联中文 | 走 UTF-8 文件引用', es.find((e) => e.id === 'E001').rule);
+  // 旧条目（无 scope/projects 行）缺省兼容
+  fs.writeFileSync(path.join(entriesDir, 'E099-old.md'), '---\nid: E099\ntitle: 旧条目\ncategory: other\nstatus: active\noccurrences: 1\nfirstSeen: 2026-01-01\nlastSeen: 2026-01-01\nworkspaces: [SandBox1]\nrule: "旧格式"\ncreated: 2026-01-01\nupdated: 2026-01-01\nsources: []\n---\n', 'utf8');
+  es = repo.listEntries();
+  const e99 = es.find((e) => e.id === 'E099');
+  check('旧条目缺省 scope=global/projects=[]', e99.scope === 'global' && e99.projects.length === 0 && e99.status === 'active', e99);
+  fs.rmSync(path.join(entriesDir, 'E099-old.md'));
+
+  const sv = server.solvedPayload();
+  check('solved.stats', sv.ok === true && sv.stats.active === 3 && sv.stats.global === 1 && sv.stats.project === 2 && sv.stats.disabled === 1, sv.stats);
+  check('solved.global 分组（类别序）', sv.global.length === 1 && sv.global[0].cat === 'encoding' && sv.global[0].entries.length === 1 && sv.global[0].entries[0].id === 'E001' && sv.global[0].entries[0].scope === 'global', sv.global);
+  check('solved.projects 多项目展开', sv.projects.length === 2 && sv.projects[0].ws === 'SandBox1' && sv.projects[0].entries.length === 2 &&
+    sv.projects[1].ws === 'wsB' && sv.projects[1].entries.length === 1 && sv.projects[1].entries[0].id === 'E003', sv.projects);
+  check('solved.disabled 独立', sv.disabled.length === 1 && sv.disabled[0].id === 'E004', sv.disabled);
+  check('solved 行无正文（轻量）', JSON.stringify(sv).indexOf('rootCause') === -1 && JSON.stringify(sv).indexOf('## 现象') === -1, '含正文字段');
+
+  const ep = server.entryPayload('E001');
+  check('entryPayload 命中全文', ep.ok === true && ep.text.indexOf('id: E001') !== -1 && ep.text.indexOf('## 对策') !== -1, ep.ok);
+  const en = server.entryPayload('E099');
+  check('entryPayload 未知编号', en.ok === false && en.error.indexOf('不存在') !== -1, en);
+  const ex = server.entryPayload('C001');
+  check('entryPayload 非法编号', ex.ok === false && ex.error.indexOf('非法') !== -1, ex);
+  check('entryPayload 错误路径不写盘', fs.readdirSync(entriesDir).length === 4, fs.readdirSync(entriesDir));
+  const rt = repo.readEntryText('E003');
+  check('readEntryText 命中', rt !== null && rt.indexOf('E003') !== -1, rt);
+  check('readEntryText 未知 → null', repo.readEntryText('E777') === null && repo.readEntryText('x') === null);
+
+  const md = repo.buildIndexMd(repo.listEntries());
+  check('INDEX 墙标题/分区', md.indexOf('# 鲸鱼小本本 · 已解决墙（INDEX）') === 0 && md.indexOf('## 🐳 全局区') !== -1 && md.indexOf('## 📁 项目区') !== -1 && md.indexOf('🛑 停用') !== -1, md.slice(0, 300));
+  check('INDEX 墙统计行', md.indexOf('active 3（全局 1 + 项目级 2）') !== -1 && md.indexOf('停用 1') !== -1, md.split('\n')[3]);
+  check('INDEX 墙项目分组计数', md.indexOf('### SandBox1（2）') !== -1 && md.indexOf('### wsB（1）') !== -1, md);
+  check('INDEX 墙 rule 管道转义', md.indexOf('\\| 走 UTF-8 文件引用') !== -1, md.split('\n').filter((l) => l.indexOf('E001') !== -1)[0]);
+  check('INDEX 墙空兜底', repo.buildIndexMd([]).indexOf('暂无 active 条目') !== -1, repo.buildIndexMd([]));
+
+  // ---- B1：AGENTS 自动段只收 scope=global（project 级绝不进全局注入）+ 状态行提示 ----
+  const body = agents.buildSectionBody(repo.listEntries(), {});
+  check('agents 排除 project 条目', body.indexOf('【encoding】') !== -1 && body.indexOf('【data-access】') === -1 &&
+    body.indexOf('python') === -1 && body.indexOf('stale-fs') === -1, body);
+  check('agents 状态行含项目级计数', body.indexOf('项目级 2') !== -1 && body.indexOf('不进全局注入') !== -1, body.split('\n').filter((l) => l.indexOf('状态：') !== -1)[0]);
+  const body2 = agents.buildSectionBody([{ status: 'active', scope: 'project', category: 'secret', rule: 'r', occurrences: 99, id: 'E9' }], {});
+  check('agents 只有项目级时提示去向', body2.indexOf('暂无全局规则') !== -1 && body2.indexOf('INDEX.md') !== -1 && body2.indexOf('【secret】') === -1, body2.split('\n').filter((l) => l.indexOf('状态：') !== -1)[0]);
+
+
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
