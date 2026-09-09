@@ -30,7 +30,16 @@ DeepSeek Harness（DSH）的自我进化机制插件：自动/半自动挖掘本
 ## 开发流
 
 - **运行源码权威位置**：本机 `~/.dsh/whale-notebook/plugin/`（采集/skill/AGENTS 提醒直接引用它）。仓库 `plugin/` 与 `docs/` 是其**发布镜像**：改动先在权威位置完成并验证（`node plugin/lifecycle/selftest.cjs`、`scripts/redact.test.cjs`），再同步到本仓库提交。
-- 同步后提交前自查：库内不得出现 `inbox.md / state.json / settings.json / entries/ / archive/ / .lifecycle/`（.gitignore 已兜底）。
+- **一键同步提交**（含本工具自身的变更）：
+
+  ```text
+  node tools/sync-release.cjs            # 镜像同步(权威→库) → 有变更则 commit → push
+  node tools/sync-release.cjs --no-push  # 只同步+提交, 不推送
+  node tools/sync-release.cjs --msg "…"  # 自定义提交信息
+  ```
+
+  语义：`plugin/`（来自 `~/.dsh/whale-notebook/plugin`）、`docs/`（来自工作区 docs 中文件名含 whale-notebook 的 .md）、`scripts/`（mine.cjs/redact.test.cjs）——目标目录先清后拷，逐字节一致；无变化则跳过提交。数据文件永不触碰（`.gitignore` 兜底 + 脚本内隐私名拒绝）。
+- 提交前自查：库内不得出现 `inbox.md / state.json / settings.json / entries/ / archive/ / .lifecycle/`。
 - 卸载/移除本机安装：`node <pkg>/lifecycle/cli.cjs uninstall remove|purge`（purge 需 `--export-dir` + `--yes`，先导出成果后删除）。
 
 ## 快速验证

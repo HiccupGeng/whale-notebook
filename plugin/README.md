@@ -77,3 +77,5 @@ node lifecycle/cli.cjs uninstall detach       # 仅 R 段(v2.1 挂载后启用)
 5. **漂移守卫**：登记后文件被外部改动, remove 会中止并提示加 `--yes`（仍先快照留档）。
 6. **R 段(运行时)**: 清单已预登记(deferred), v2.1 挂载后实施; 当前 detach/remove 对 R 零动作。
 7. **`remove` 后 `.lifecycle` 保留**（在 D 内）——与设计稿「清单随最后一级卸载删除」的裁定：remove 不清 D，.lifecycle 是重装/恢复依据；**purge 随 D 一起物理消失**, 无任何残留（含清单自身）。
+8. **成果确认约定**：卸载计划先输出成果文件清单（待审候选/经验条目/归档计数 + 逐项去留），AI 删除前必须经用户确认；purge 前置导出（`--export-dir`）与二次确认（`--yes`）。
+9. **已验证**（2026-09-09 本机真实演练 + 沙盒 66 PASS）：remove → 残留核对 → 重装字节等价还原（hash 一致）；中途 AGENTS 注入/skill 目录的移除与恢复均由 DSH 原生机制即时反映。
