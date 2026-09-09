@@ -8,6 +8,7 @@ DeepSeek Harness（DSH）的自我进化机制插件：自动/半自动挖掘本
 
 | 路径 | 内容 |
 |---|---|
+| `PROJECT-INTRO.md` | ★项目总览（与权威 `~/.dsh/whale-notebook/PROJECT-INTRO.md` 同步；全景/模块功能/命令/文档导航，新上手或 AI 会话先读） |
 | `docs/` | 设计/实施/调研文档：实施记录 · 插件化架构(v2.0) · 生命周期设计(安装/卸载/清单) · 生态调研核实与定位对比 |
 | `plugin/` | `@deepseek-ai/dsh-whale-notebook` 插件包源码：core/store/collector/inject/review/ui 六模块 + `lifecycle/`(自举安装卸载工具) + `manifest.json`(足迹清单) + `cordis.patch.yml`(挂载模板) |
 | `scripts/` | v1 兼容薄壳与回归测试（引用 `../plugin/src`，需与 plugin 同层放置运行） |

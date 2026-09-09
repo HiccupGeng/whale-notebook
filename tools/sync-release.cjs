@@ -5,10 +5,11 @@
 //   1) 运行源码   ~/.dsh/whale-notebook/plugin/   (或 DSH_HOME / DSH_WHALE_NB_DIR 覆盖)
 //   2) 设计文档   <repo 同级的 workspace>/docs/    中文件名含 whale-notebook 的 .md
 //   3) 兼容脚本   <数据目录>/scripts/ 的 mine.cjs 与 redact.test.cjs
-// 目标: 本仓库(脚本所在库) 的 plugin/ docs/ scripts/
+//   4) 项目总览   <数据目录>/PROJECT-INTRO.md → 库根 PROJECT-INTRO.md(固定文件镜像)
+// 目标: 本仓库(脚本所在库) 的 plugin/ docs/ scripts/ PROJECT-INTRO.md
 //
 // 语义: 镜像同步(目标目录先清空再整拷, 防残留/漂移); 无文件变化则不提交不推送。
-// 隐私: 只同步上述三组路径; 数据文件(inbox/state/settings/entries/.lifecycle 等)
+// 隐私: 只同步上述路径; 数据文件(inbox/state/settings/entries/.lifecycle 等)
 //       永不触碰——.gitignore 同步兜底; 本脚本自身也拒绝处理含这些名字的路径。
 //
 // 用法: node tools/sync-release.cjs [--no-push] [--msg "自定义提交信息"]
@@ -24,6 +25,8 @@ const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const NB = process.env.DSH_WHALE_NB_DIR || path.join(DSH_HOME, 'whale-notebook');
 const WORKSPACE = path.resolve(REPO, '..');
 const DOCS_SRC = path.join(WORKSPACE, 'docs');
+// 固定文件镜像: { 数据目录内相对路径: 库内相对路径 }
+const EXTRA_FILES = { 'PROJECT-INTRO.md': 'PROJECT-INTRO.md' };
 
 const PRIVATE_NAMES = /(^|[\\/])(inbox\.md|state\.json|settings\.json|entries|archive|\.lifecycle|AGENTS\.md)([\\/]|$)/i;
 const out = (prefix, m) => console.log(`[sync] ${prefix} ${m}`);
@@ -83,6 +86,17 @@ function mirrorScripts(srcDir, dstDir) {
     else out('warn', `权威源缺 ${f}（跳过）`);
   }
 }
+// 固定文件镜像(如 PROJECT-INTRO.md)
+function mirrorExtraFiles(srcRoot, dstRoot) {
+  for (const [rel, dstRel] of Object.entries(EXTRA_FILES)) {
+    const sp = path.join(srcRoot, rel);
+    const dp = path.join(dstRoot, dstRel);
+    assertNoPrivate(path.relative(REPO, dp));
+    if (!fs.existsSync(sp)) { out('warn', `权威源缺 ${rel}（跳过）`); continue; }
+    fs.mkdirSync(path.dirname(dp), { recursive: true });
+    fs.copyFileSync(sp, dp);
+  }
+}
 
 function main() {
   const argv = process.argv.slice(2);
@@ -100,11 +114,12 @@ function main() {
   }
 
   out('info', `发布镜像库: ${REPO}`);
-  out('info', `权威源码: ${NB}\\plugin  →  docs: ${DOCS_SRC}  →  scripts: ${NB}\\scripts`);
+  out('info', `权威源码: ${NB}\\plugin  →  docs: ${DOCS_SRC}  →  scripts: ${NB}\\scripts  →  PROJECT-INTRO: ${NB}\\PROJECT-INTRO.md`);
   try {
     mirrorDir(path.join(NB, 'plugin'), path.join(REPO, 'plugin'));
     mirrorDocs(DOCS_SRC, path.join(REPO, 'docs'));
     mirrorScripts(path.join(NB, 'scripts'), path.join(REPO, 'scripts'));
+    mirrorExtraFiles(NB, REPO);
   } catch (e) {
     out('err', `同步失败: ${e.message}`);
     process.exit(1);
@@ -142,4 +157,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { mirrorDir, mirrorDocs, mirrorScripts };
+module.exports = { mirrorDir, mirrorDocs, mirrorScripts, mirrorExtraFiles };
