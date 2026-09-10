@@ -1,9 +1,11 @@
-// lifecycle/cli.cjs - 安装/卸载/清单机制 CLI（v0.1: I+D 段; R 段 deferred 待 v2.1）
+// lifecycle/cli.cjs - 安装/卸载/清单机制 CLI
+// 段位: I 集成(AGENTS+skill) / D 数据(用户记忆) / R 运行时(web 面板部署副本, 动作归 scripts/deploy-web.cjs)
 // 设计依据: docs/2026_09_09_16_whale-notebook生命周期设计.md
 // 自举约束: 仅 node 内建; 从任意位置 node <pkg>/lifecycle/cli.cjs 均可运行。
 // 所有写操作两段式: 默认 dry-run 出计划(展示给用户) → 确认后 --apply。
 'use strict';
 const path = require('path');
+const { spawnSync } = require('child_process');
 const C = require('./consts.cjs');
 const Z = require('./zones.cjs');
 const M = require('./manifest.cjs');
@@ -48,12 +50,23 @@ function entryPath(home, def, site) {
 
 // ---------------- 现场评估: 每 installed/removed 条目 vs 现场; 孤儿扫描 ----------------
 function assess(home, view) {
-  const res = { diffs: [], fails: [], orphans: [] };
+  const res = { diffs: [], fails: [], orphans: [], runtime: [] };
   for (const { def, site } of view.entries) {
-    if (def.segment === 'R') continue; // deferred, v2.1
     const st = site ? site.state : def.state;
     if (st === 'deferred' || st === 'pending') continue;
     const p = entryPath(home, def, site);
+    // R 段(运行时): 写入/摘除动作归 managedBy 声明的工具(deploy-web.cjs), lifecycle 只登记与对账。
+    // 对账结果进 res.runtime(信息级), 不参与 fails/diffs —— 因此不左右 check 退出码。
+    if (def.segment === 'R') {
+      const r = runtimeProbe(home, def, M.ctxOf(home), site);
+      if (r) {
+        r.state = st;
+        r.expected = st === 'installed';
+        r.ok = r.installed === r.expected;
+        res.runtime.push(r);
+      }
+      continue;
+    }
     const present = X.exists(p);
     const isAgents = def.id === 'agents';
     const zonesMode = isAgents && site && site.agentsMode === 'zones';
@@ -113,6 +126,143 @@ function assess(home, view) {
   return res;
 }
 
+// ---------------- R 段(运行时足迹): 探测 / 登记 / 摘除 ----------------
+// 唯一写入者原则: R 段的实际写入与删除由包内 scripts/deploy-web.cjs 执行(它管复制包 + patch 挂载行,
+// 幂等且有 --check/--undo); lifecycle 只负责"登记、对账、计划、快照、驱动"。
+function deployToolPath() { return path.join(C.pkgDir(), 'scripts', 'deploy-web.cjs'); }
+
+// 现场探测一条 R 条目: 目录看存在性; 带 markers 的(如 cordis.patch.yml)只看标记区是否在位 ——
+// 该文件可能同时含其它插件的行, 故既不能整文件 hash 判漂移, 也不能整文件替换。
+function runtimeProbe(home, def, ctx, se) {
+  if (!se) return null;
+  const p = se.path || C.resolvePathTpl(def.path, ctx);
+  const fileExists = X.exists(p);
+  let installed;
+  let detail;
+  if (def.kind === 'dir') {
+    installed = fileExists;
+    detail = fileExists ? '目录在位' : '目录不存在';
+  } else if (def.markers) {
+    const inZone = fileExists && Z.hasZone(X.readText(p), def.markers.begin, def.markers.end);
+    installed = inZone;
+    detail = !fileExists ? '文件不存在' : (inZone ? '标记区在位' : '无标记区(文件在但未挂载)');
+  } else {
+    installed = fileExists;
+    detail = fileExists ? '文件在位' : '文件不存在';
+  }
+  return {
+    id: def.id, kind: def.kind, path: p, fileExists, installed, detail,
+    state: installed ? 'installed' : 'absent',
+    managedBy: def.managedBy || 'scripts/deploy-web.cjs',
+  };
+}
+
+// 站点清单补齐: 包内默认清单新增/改名的条目(例如 R 段 runtime-pkg → runtime-web-pkg)在旧站点清单里没有 →
+// 按默认结构补骨架(pending), 随后由 realizeRuntime 用现场探测覆盖 R 段状态。
+function ensureSiteEntries(site, def, ctx) {
+  const added = [];
+  for (const e of def.entries) {
+    if (site.entries.some((x) => x.id === e.id)) continue;
+    site.entries.push({
+      id: e.id, segment: e.segment, kind: e.kind, owner: e.owner,
+      path: C.resolvePathTpl(e.path, ctx),
+      agentsMode: e.agentsMode || null,
+      state: 'pending',
+      hashAfter: null, hashBefore: null, adoptedAt: null, backups: [],
+      note: e.note || '',
+    });
+    added.push(e.id);
+  }
+  return added;
+}
+
+// install --apply: 以现场为准登记 R 段(不写入、不删除任何东西); 同时把登记路径拉回默认清单(修旧版失效路径)
+function realizeRuntime(home, site, def, ctx) {
+  const list = [];
+  for (const d of def.entries.filter((e) => e.segment === 'R')) {
+    const se = site.entries.find((x) => x.id === d.id);
+    const r = runtimeProbe(home, d, ctx, se);
+    if (!r) continue;
+    se.state = r.state;
+    se.adoptedAt = C.isoLocal();
+    se.hashAfter = null;
+    se.hashBefore = null;
+    if (se.path !== r.path) se.path = r.path;
+    list.push(r);
+  }
+  return list;
+}
+
+// uninstall detach(以及 remove/purge 的 R 部分): 先计划 → 快照 → 驱动 deploy-web --undo → 重新登记现场
+function detachRuntime(home, opts) {
+  const { level, flags } = opts;
+  const def = M.loadDefault();
+  const ctx = M.ctxOf(home);
+  // 用调用方传进来的 site 对象(而非重新 load): 否则本函数保存的 R 段状态会被调用方随后保存的旧对象覆盖
+  const site = opts.site || M.loadSite(home);
+  const probes = def.entries.filter((e) => e.segment === 'R')
+    .map((d) => runtimeProbe(home, d, ctx, site.entries.find((x) => x.id === d.id))).filter(Boolean);
+  out('plan', `${level}: R 段(运行时足迹) = web 面板部署副本 + 加载器挂载行`);
+  for (const r of probes) out('plan', `  · ${r.id} [登记 ${r.state}] 现场: ${r.detail} → ${r.path}`);
+  // "有无足迹"以标记区/目录是否真的在位为准: patch 文件本身可能仍含其它插件的行(那不是本插件的足迹)
+  const touched = probes.filter((r) => r.installed);
+  if (!touched.length) {
+    out('ok', `${level}: R 段现场已无足迹(全部 absent) → 零动作`);
+    if (flags.apply) {
+      for (const r of probes) site.entries.find((e) => e.id === r.id).state = 'absent';
+      site.lastOp = { cmd: `uninstall ${level}`, at: C.isoLocal(), ok: true };
+      M.saveSite(home, site);
+    }
+    return 'noop';
+  }
+  const tool = deployToolPath();
+  const args = ['--undo', '--apply', ...(flags.yes ? ['--yes'] : [])];
+  out('plan', `动作交由唯一写入者: ${tool}`);
+  out('plan', `  node "${tool}" ${args.join(' ')}`);
+  if (!flags.yes) out('plan', '  (包目录会保留; 要连副本目录一起删, 请加 --yes)');
+  if (!flags.apply) {
+    out('info', 'dry-run: 未执行任何写操作(patch 未改、目录未删); 确认后重跑加 --apply');
+    return 'planned';
+  }
+  if (!X.isFile(tool)) { out('err', `缺部署工具: ${tool}`); process.exitCode = 1; return 'failed'; }
+  for (const r of probes) {
+    if (!r.fileExists) continue;
+    const rec = M.snapshot(home, site, r.id, r.path);
+    if (rec) out('ok', `前像快照: ${rec.path}`);
+  }
+  const res = spawnSync(process.execPath, [tool, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_HOME: home }, // 关键: 让工具作用于同一个 home(含 --home 覆盖的场景)
+  });
+  const txt = `${res.stdout || ''}${res.stderr || ''}`.trim();
+  if (txt) for (const line of txt.split('\n')) out('tool', line);
+  if (res.status !== 0) {
+    out('err', `${tool} 退出码 ${res.status}; R 段状态未更新(现场可能处于中间态, 复查后重跑)`);
+    process.exitCode = 1;
+    return 'failed';
+  }
+  const after = [];
+  for (const d of def.entries.filter((e) => e.segment === 'R')) {
+    const se = site.entries.find((e) => e.id === d.id);
+    const r = runtimeProbe(home, d, ctx, se);
+    if (!r) continue;
+    se.state = r.state;
+    se.adoptedAt = C.isoLocal();
+    after.push(`${r.id}=${r.state}`);
+  }
+  site.lastOp = { cmd: `uninstall ${level}`, at: C.isoLocal(), ok: true };
+  M.saveSite(home, site);
+  out('ok', `${level} 完成: R 段已摘除并重新登记(${after.join(', ')})`);
+  out('info', '重启 dsh web 后插件不再加载(界面上的决策箱面板随之消失)');
+  return 'done';
+}
+
+// 旧站点清单可能缺少默认清单新增的条目(如 R 段改名) → 提示待迁移(install --apply 会自动补登记)
+function untrackedEntries(view) {
+  if (!view.site) return [];
+  return view.entries.filter((x) => !x.site).map((x) => x.def.id);
+}
+
 // ---------------- status ----------------
 function cmdStatus(home) {
   out('lifecycle', `${C.VERSION} · ${C.PLUGIN_NAME} · dshHome=${home}`);
@@ -134,7 +284,13 @@ function cmdStatus(home) {
     for (const d of a.diffs) out('status', `差异: ${d}`);
     for (const f of a.fails) out('status', `失败: ${f}`);
     for (const o of a.orphans) out('status', `孤儿: ${o}`);
-    if (!a.diffs.length && !a.fails.length && !a.orphans.length) out('status', '现场与清单一致');
+    for (const r of a.runtime) {
+      out('status', `R 段: ${r.id} 登记=${r.state} 现场=${r.installed ? 'installed' : 'absent'}(${r.detail}) ${r.ok ? '一致' : '不一致'} · 动作归 ${r.managedBy}`);
+      if (!r.ok) out('status', `R 段提示: ${r.id} 与登记不一致 → 重跑 install --apply 重新登记, 或 uninstall detach 摘除`);
+    }
+    const untracked = untrackedEntries(view);
+    if (untracked.length) out('status', `待迁移: ${untracked.join(', ')}(旧站点清单无此条目) → 重跑 install --apply 补登记`);
+    if (!a.diffs.length && !a.fails.length && !a.orphans.length) out('status', '现场与清单一致(I/D 段; R 段见上, 归 deploy-web.cjs 管)');
   }
 }
 
@@ -147,8 +303,19 @@ function cmdCheck(home) {
   for (const d of a.diffs) out('check', `差异: ${d}`);
   for (const f of a.fails) out('check', `失败: ${f}`);
   for (const o of a.orphans) out('check', `孤儿: ${o}`);
+  for (const r of a.runtime) {
+    out('check', `R 段: ${r.id} 登记=${r.state} 现场=${r.installed ? 'installed' : 'absent'}(${r.detail}) ${r.ok ? '一致' : '不一致'} · 动作归 ${r.managedBy}(信息级, 不影响本命令退出码)`);
+    if (!r.ok) out('check', `R 段提示: 重跑 install --apply 重新登记, 或 uninstall detach 摘除运行时足迹`);
+  }
+  const untracked = untrackedEntries(view);
+  if (untracked.length) {
+    for (const id of untracked) out('check', `待迁移: ${id} 在默认清单里但站点清单未登记(旧版本清单)`);
+    out('err', `check 未通过: 站点清单待迁移 ${untracked.length} 条 → 重跑 install --apply(幂等, 只补登记)`);
+    process.exitCode = 1;
+    return;
+  }
   if (!a.diffs.length && !a.fails.length && !a.orphans.length) {
-    out('ok', 'check 通过: 清单 vs 现场一致, 无孤儿');
+    out('ok', `check 通过: I/D 段清单 vs 现场一致, 无孤儿(已对账 R 段 ${a.runtime.length} 条)`);
   } else {
     out('err', `check 未通过: 失败 ${a.fails.length} / 差异 ${a.diffs.length} / 孤儿 ${a.orphans.length}`);
     process.exitCode = 1;
@@ -229,7 +396,9 @@ function cmdInstall(home, flags) {
   }
   for (const s of p.steps) out('plan', `- ${s}`);
   for (const n of p.notes) out('warn', n);
-  out('plan', '- R 段(deferred): v2.1 真实挂载后再实施, 本次不动作');
+  out('plan', '- R 段(运行时): 只登记与对账, 不写入 —— 部署/摘除动作归 scripts/deploy-web.cjs');
+  out('plan', '  · 登记时以现场探测为准: 有部署副本 → installed; 没有 → absent');
+  out('plan', '  · 要部署或摘除运行时足迹: node scripts/deploy-web.cjs --apply | lifecycle/cli.cjs uninstall detach --apply');
   if (!flags.apply) {
     out('info', 'dry-run: 未执行任何写操作; 确认后重跑加 --apply');
     return;
@@ -326,8 +495,18 @@ function applyInstall(home, flags, p) {
     // 5. data/skill 状态
     setEntry('data', { state: 'installed', adoptedAt: C.isoLocal(), hashAfter: null });
     setEntry('skill', { state: 'installed', adoptedAt: C.isoLocal(), hashAfter: X.sha256(skillPath) });
+    // 5b. 清单版本迁移(丢弃改名前的废弃条目) + 补齐默认清单新增条目 + R 段现场探测登记(不写入/不删除)
+    const dropped = M.pruneSite(p.def, site);
+    if (dropped.length) out('warn', `清单版本迁移: 丢弃已废弃条目 ${dropped.join(', ')}(结构以包内默认清单为准)`);
+    const added = ensureSiteEntries(site, p.def, ctx);
+    if (added.length) out('ok', `清单版本迁移: 补登记新条目 ${added.join(', ')}`);
+    for (const r of realizeRuntime(home, site, p.def, ctx)) {
+      out('ok', `R: ${r.id} → ${r.state} (${r.detail}) ${r.path} [managedBy ${r.managedBy}]`);
+    }
     // 6. 落站点清单 + 自检
     site.state = 'installed';
+    site.schemaVersion = p.def.schemaVersion;
+    site.manifestVersion = p.def.manifestVersion; // 站点清单跟随包内默认清单的 schema 版本
     site.installedAt = site.installedAt || C.isoLocal();
     site.lastOp = { cmd: 'install', at: C.isoLocal(), ok: true };
     M.saveSite(home, site);
@@ -370,9 +549,7 @@ function cmdUninstall(home, level, flags) {
     return;
   }
   if (level === 'detach') {
-    out('plan', 'detach: R 段条目 state=deferred(v2.1 挂载后启用) → 零动作');
-    if (flags.apply) out('ok', 'detach 完成: R 段当前未登记, 无运行时可摘');
-    else out('info', 'dry-run: 未执行任何写操作');
+    detachRuntime(home, { level, flags, site });
     return;
   }
   if (!['remove', 'purge'].includes(level)) {
@@ -397,10 +574,20 @@ function cmdUninstall(home, level, flags) {
   const agentsExists = X.exists(agentsPath);
 
   out('plan', level === 'remove'
-    ? 'remove: 清除 R(未挂载,无) + I(AGENTS/skill); D 段(用户记忆)原样保留'
-    : 'purge: 清除 R(未挂载,无) + I + D; 用户记忆数据永不静默删除 → 先导出后删除(不可逆)');
+    ? 'remove: 清除 R(运行时足迹, 动作归 deploy-web.cjs) + I(AGENTS/skill); D 段(用户记忆)原样保留'
+    : 'purge: 清除 R + I + D; 用户记忆数据永不静默删除 → 先导出后删除(不可逆)');
   for (const d of drift) out('plan', `差异: ${d}`);
   if (drift.length) out('warn', '漂移提示: --apply 需加 --yes(删除前仍先字节级快照留档)');
+
+  // R 段先摘(唯一写入者 deploy-web.cjs); 失败即中止, 避免留下"挂载行已删/副本残留"的半态继续动 I/D
+  const rt = detachRuntime(home, { level, flags, site });
+  if (rt === 'failed') {
+    out('err', 'R 段摘除失败 → 中止后续段处理; 现场可能处于中间态, 复查后重跑本命令(幂等)');
+    return;
+  }
+  if (flags.apply && !flags.yes && rt === 'done') {
+    out('info', 'R 段副本目录保留(未传 --yes); 要连副本一起清: 重跑本命令加 --yes');
+  }
 
   if (level === 'remove') {
     if (!Iinstalled && !skillExists && !agentsExists) {

@@ -17,7 +17,7 @@
       "inject": ["@deepseek-ai/dsh-client-runtime"]
     }
   },
-  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "manifest.json", "src/**/*.cjs", "lifecycle/**/*.cjs"],
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "manifest.json", "src/**/*.cjs", "src/**/*.md", "lifecycle/**/*.cjs", "lifecycle/**/*.md"],
   "license": "MIT",
-  "_comment": "v2.1 真实挂载时: 1) 本包整体复制到 profiles/node_modules/@deepseek-ai/dsh-whale-notebook (hoisted 布局保证依赖可解析); 2) profile package.json 的 dsh.profile.bundles 追加本包名; 3) 重启 dsh web。cordis.patch.yml 为主机平面行; 会话平面工具/事件走 agent preset 行(见 src/ui/contracts.md 与插件 README)。lifecycle/ = 自举生命周期工具(安装/卸载/清单, 仅 node 内建, 与业务模块解耦, 见 lifecycle/README 与插件 README)。"
+  "_comment": "v2.1 挂载实况(以 scripts/deploy-web.cjs 为准): 1) 本包整体复制到 profiles/web/node_modules/@deepseek-ai/dsh-whale-notebook (web profile 的 hoisted 布局保证依赖可解析); 2) 在 profiles/web/cordis.patch.yml 的 managed 标记区内插入加载器行(不做 package.json 的 bundles 手术); 3) 重启 dsh web 生效。lifecycle/ = 自举生命周期工具(安装/卸载/清单, 仅 node 内建, 与业务模块解耦; R 段写入归 deploy-web.cjs, 见 lifecycle/README 与插件 README)。契约面(视图模型/事件/端点)见 src/ui/contracts.md。"
 }

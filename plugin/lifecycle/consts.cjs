@@ -3,7 +3,7 @@
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const PLUGIN_NAME = '@deepseek-ai/dsh-whale-notebook';
 const AGENTS_FILE = 'AGENTS.md';
 const SKILL_FILE = 'whale-notebook.md';

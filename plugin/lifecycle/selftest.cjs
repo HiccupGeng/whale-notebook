@@ -1,5 +1,6 @@
 // lifecycle/selftest.cjs - 生命周期端到端自测（沙盒: 临时 DSH home, 绝不触碰真实 ~/.dsh）
 // 验收覆盖(设计文档 §13): 1 幂等 / 3 remove 后无残留且可恢复 / 4 purge 无导出+确认拒绝 / 5 中断可续(重跑幂等)
+//              + §F6 R 段(运行时足迹): 清单与 deploy-web.cjs 逐字一致 / 现场探测登记 / 摘除只经唯一写入者
 // 用法: node plugin/lifecycle/selftest.cjs   （退出码 0=全绿）
 'use strict';
 const fs = require('fs');
@@ -241,6 +242,109 @@ function f5DriftGuard() {
   ok(bak('skill.bak') !== null && bak('skill.bak').includes('外部改动'), 'F5c 漂移后快照保留最新字节');
 }
 
+// ================= F6: R 段(运行时足迹) —— 登记/对账/摘除 =================
+// 关键安全前提: detach 把动作交给 scripts/deploy-web.cjs, 必须用 DSH_HOME=<home> 覆盖,
+// 否则会在测试(或用户 --home)时误动真实 ~/.dsh 里的部署。本段同时用真实文件的 hash 做反证。
+const DEPLOY_SRC = fs.readFileSync(path.join(PKG, 'scripts', 'deploy-web.cjs'), 'utf8');
+function deployConst(name) {
+  const m = DEPLOY_SRC.match(new RegExp(`const ${name} = '((?:[^'\\\\]|\\\\.)*)'`));
+  return m ? m[1].replace(/\\n/g, '\n') : null;
+}
+const D_MARK_START = deployConst('MARK_START');
+const D_MARK_END = deployConst('MARK_END');
+
+function fakeDeploy(home) {
+  const webDir = path.join(home, 'profiles', 'web');
+  const pkgDir = path.join(webDir, 'node_modules', '@deepseek-ai', 'dsh-whale-notebook');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), '{"name":"@deepseek-ai/dsh-whale-notebook","version":"0.7.0"}\n');
+  const patchFile = path.join(webDir, 'cordis.patch.yml');
+  fs.writeFileSync(patchFile, '# 其它插件的挂载行(必须原样保留)\n- insert:\n    - id: other-plugin\n      name: "@x/y"\n\n'
+    + D_MARK_START + '- insert:\n    - id: whale-notebook\n' + D_MARK_END);
+  return { pkgDir, patchFile };
+}
+function siteEntry(home, id) {
+  const site = JSON.parse(fs.readFileSync(path.join(home, 'whale-notebook/.lifecycle/manifest.json'), 'utf8'));
+  return site.entries.find((e) => e.id === id);
+}
+
+function f6RuntimeSegment() {
+  console.log('\n[F6] R 段: 清单与 deploy-web.cjs 一致 / 探测登记 / 摘除归唯一写入者');
+  const manifest = JSON.parse(fs.readFileSync(path.join(PKG, 'manifest.json'), 'utf8'));
+  const defPkg = manifest.entries.find((e) => e.id === 'runtime-web-pkg');
+  const defPatch = manifest.entries.find((e) => e.id === 'runtime-web-patch');
+  ok(!!defPkg && !!defPatch, 'F6a 清单含 R 段两条(runtime-web-pkg / runtime-web-patch)');
+  ok(defPkg.segment === 'R' && defPatch.segment === 'R', 'F6a 两条均归 R 段');
+  ok(defPkg.state === 'probe' && defPatch.state === 'probe', 'F6a R 段状态为 probe(现场探测, 不写死)');
+  ok(defPkg.managedBy === 'scripts/deploy-web.cjs' && defPatch.managedBy === 'scripts/deploy-web.cjs', 'F6a 声明唯一写入者 scripts/deploy-web.cjs');
+  ok(/profiles[\\/]web[\\/]node_modules/.test(defPkg.path), 'F6a 包路径 = web profile 的 node_modules(真实部署位)');
+  ok(/cordis\.patch\.yml$/.test(defPatch.path), 'F6a 挂载行条目 = profiles/web/cordis.patch.yml');
+  ok(!!D_MARK_START && !!D_MARK_END, 'F6a 已从 deploy-web.cjs 取出 MARK_START/MARK_END');
+  // 清单里只存"标记行"本身(不带尾换行): 便于 hasZone 匹配且不受行尾风格影响
+  const markerLine = (s) => String(s || '').replace(/\s+$/, '');
+  ok(markerLine(defPatch.markers.begin) === markerLine(D_MARK_START) && markerLine(defPatch.markers.end) === markerLine(D_MARK_END),
+    'F6a 清单 markers 与 deploy-web.cjs 的 MARK_START/MARK_END 逐字一致');
+
+  const home = path.join(TMP, 'f6-home');
+  const seed = path.join(TMP, 'f6-seed');
+  mkSeed(seed, SKILL_SRC, null);
+  mkNb(home);
+  // 未部署的新机: 登记为 absent
+  let r = run(['install', '--apply', '--home', home, '--seed-dir', seed]);
+  expectExit(r, 0, 'F6b install --apply');
+  expectText(r, 'R: runtime-web-pkg → absent', 'F6b 未部署 → R 段登记 absent');
+  ok(siteEntry(home, 'runtime-web-pkg').state === 'absent', 'F6b 站点清单 R 状态 = absent');
+  // 造出"已部署"现场(模拟 deploy-web --apply 的结果): 登记与实际不符时只提示, 不左右退出码
+  const fake = fakeDeploy(home);
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F6c R 段不一致不改变 check 退出码');
+  expectText(r, 'R 段: runtime-web-pkg', 'F6c R 段被对账');
+  expectText(r, '不一致', 'F6c 与实际不符被标出');
+  expectText(r, '不影响本命令退出码', 'F6c 明示信息级');
+  // 重新登记 → installed
+  r = run(['install', '--apply', '--home', home, '--seed-dir', seed]);
+  expectExit(r, 0, 'F6d 重新登记 install --apply');
+  expectText(r, 'R: runtime-web-pkg → installed', 'F6d 现场有副本 → 登记 installed');
+  ok(siteEntry(home, 'runtime-web-patch').state === 'installed', 'F6d 站点清单 patch 条目 = installed');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F6e 登记一致后 check 通过');
+  expectText(r, 'check 通过: I/D 段', 'F6e');
+  // 摘除: 干跑零写
+  const patchBefore = fs.readFileSync(fake.patchFile, 'utf8');
+  const realHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+  const realPatch = path.join(realHome, 'profiles', 'web', 'cordis.patch.yml');
+  const realHashBefore = fs.existsSync(realPatch) ? fs.readFileSync(realPatch).toString('base64') : null;
+  r = run(['uninstall', 'detach', '--home', home]);
+  expectExit(r, 0, 'F6f detach 干跑');
+  expectText(r, 'deploy-web.cjs', 'F6f 计划点明唯一写入者');
+  expectText(r, '--undo', 'F6f 计划含 --undo');
+  expectText(r, 'dry-run', 'F6f 干跑未执行');
+  ok(fs.readFileSync(fake.patchFile, 'utf8') === patchBefore, 'F6f 干跑零写(patch 字节不变)');
+  // 摘除: apply(不删副本目录)
+  r = run(['uninstall', 'detach', '--apply', '--home', home]);
+  expectExit(r, 0, 'F6g detach --apply');
+  const patchAfter = fs.readFileSync(fake.patchFile, 'utf8');
+  ok(!patchAfter.includes(D_MARK_START), 'F6g 标记区已摘除');
+  ok(patchAfter.includes('- id: other-plugin'), 'F6g 其它插件的行原样保留(不整文件替换)');
+  ok(fs.existsSync(fake.pkgDir), 'F6g 未传 --yes → 副本目录保留');
+  ok(siteEntry(home, 'runtime-web-patch').state === 'absent', 'F6g 摘除后重新登记: patch=absent');
+  ok(siteEntry(home, 'runtime-web-pkg').state === 'installed', 'F6g 副本仍在 → pkg 仍登记 installed(如实)');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F6h 摘除后 check 仍通过(R 段不左右退出码)');
+  // 摘除: --yes 连副本目录一起删
+  r = run(['uninstall', 'detach', '--apply', '--yes', '--home', home]);
+  expectExit(r, 0, 'F6i detach --yes');
+  ok(!fs.existsSync(fake.pkgDir), 'F6i 副本目录已删除');
+  ok(siteEntry(home, 'runtime-web-pkg').state === 'absent', 'F6i site: pkg=absent');
+  // 幂等: 已无足迹 → 零动作
+  r = run(['uninstall', 'detach', '--apply', '--home', home]);
+  expectExit(r, 0, 'F6j detach 幂等');
+  expectText(r, 'R 段现场已无足迹', 'F6j 已清 → 零动作');
+  // 反证: 全过程未触碰真实 home 的部署文件
+  const realHashAfter = fs.existsSync(realPatch) ? fs.readFileSync(realPatch).toString('base64') : null;
+  ok(realHashBefore === realHashAfter, 'F6k 反证: 真实 home 的 cordis.patch.yml 字节未变(DSH_HOME 覆盖生效)');
+}
+
 // ================= main =================
 TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-lc-'));
 console.log(`自测沙盒: ${TMP}`);
@@ -251,6 +355,7 @@ try {
   f3Purge();
   f4ZonesMode();
   f5DriftGuard();
+  f6RuntimeSegment();
   console.log(`\n结果: ${pass} PASS / ${fail} FAIL`);
   if (fail) process.exitCode = 1;
 } finally {

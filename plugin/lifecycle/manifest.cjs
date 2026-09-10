@@ -41,7 +41,7 @@ function emptySite(defaultManifest, ctx, state) {
       id: e.id, segment: e.segment, kind: e.kind, owner: e.owner,
       path: resolvePathTpl(e.path, ctx),
       agentsMode: e.agentsMode || null,
-      state: e.state === 'deferred' ? 'deferred' : 'pending',
+      state: e.state === 'deferred' || e.state === 'probe' ? e.state : 'pending',
       hashAfter: null,
       hashBefore: null,
       adoptedAt: null,
@@ -49,6 +49,16 @@ function emptySite(defaultManifest, ctx, state) {
       note: e.note || '',
     })),
   };
+}
+
+// 清单版本迁移: 丢弃站点清单里"默认清单已不存在"的条目(如 R 段改名 runtime-pkg → runtime-web-pkg),
+// 返回被丢弃的 id 列表。默认条目的状态一律以 default 的结构为准, 避免旧结构继续占据 status 列表。
+function pruneSite(defaultManifest, site) {
+  if (!site || !Array.isArray(site.entries)) return [];
+  const known = new Set(defaultManifest.entries.map((e) => e.id));
+  const dropped = site.entries.filter((e) => !known.has(e.id)).map((e) => e.id);
+  if (dropped.length) site.entries = site.entries.filter((e) => known.has(e.id));
+  return dropped;
 }
 
 // 合并视图: 默认(结构) + 站点(状态) 按 id 对位。返回 defaultEntries 每条附 siteEntry(可空)
@@ -102,6 +112,6 @@ function latestBackup(home, id) {
 }
 
 module.exports = {
-  ctxOf, loadDefault, loadSite, saveSite, emptySite, mergedView, zoneOf, snapshot, latestBackup,
+  ctxOf, loadDefault, loadSite, saveSite, emptySite, pruneSite, mergedView, zoneOf, snapshot, latestBackup,
   defaultManifestPath, siteManifestPath,
 };
