@@ -56,7 +56,8 @@ function inboxRow(candidateId, row) {
   const id = 'C' + String(candidateId).padStart(3, '0');
   return `| ${id} | ${cell(row.cat)} | ${cell(row.n)} | ${cell([...row.wsSet].slice(0, 2).join(','))} | ${cell(String(row.text).slice(0, 120))} | ${cell(row.time || '')} |`;
 }
-const INBOX_HEADER = '| 编号 | 类别 | 次数 | 工作区 | 现象（一行，已打码） | 时间 |\n|---|---|---|---|---|---|';
+// v0.6.1：列名与真实格式/面板文案统一为「首次出现」（该列填的是 fmtTime(first)，不是最近时间）
+const INBOX_HEADER = '| 编号 | 类别 | 次数 | 工作区 | 现象（一行，已打码） | 首次出现 |\n|---|---|---|---|---|---|';
 
 // 经验条目 frontmatter 模板（review/commit 用）
 // v0.4 扩展：scope（global|project，缺省=global 兼容旧条目）+ projects（scope=project 时的适用项目白名单，可多项目）
