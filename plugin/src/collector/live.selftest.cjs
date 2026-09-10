@@ -84,6 +84,22 @@ function evResult(cid, text, isError, t) {
       gn.re.test('ssh : Warning: Permanently added ... Permission denied (publickey)')
       && sb.re.test('Permission denied (publickey)') === false);
 
+    // ---- ①c v0.7.1：回声过滤补漏（转储信封 / 会话记录 JSON 信封 / notebook 渲染行）----
+    // 三条都是「复核旧候选 / 自检采集器」时真实出现过的输出形态：信封与原文都不含既有强特征，
+    // 旧版三道过滤全放过 → 同一物理事件被当成新事件开行、反复「复发」（实测 C109）。
+    check('回声签名：会话日志转储信封（==== L### / kind= / type=）',
+      isMetaEcho('==== L3199 tool/result [{"type":"text","text":"=== trying 10.0.0.1 ==="}]')
+      && isMetaEcho('==== L2809 [1786939705608] kind=tool/call')
+      && isMetaEcho('OLD TOTAL 5426 --- OLD L3197 type=assistant/message time=1786940004818'));
+    check('回声签名：会话记录 JSON 信封（含反斜杠转义形态）',
+      isMetaEcho('[{\\"type\\":\\"tool/result\\",\\"seq\\":1014}]') && isMetaEcho('{"type":"user/message","time":1}'));
+    check('回声签名：notebook 渲染行（候选行 / 条目行 / echo 归档行）',
+      isMetaEcho('| C109 | git-net | 1 | SandBox1 | 复发（原 C087）：… | 2026-09-10 11:03 |')
+      && isMetaEcho('| E002 | 推送失败多为瞬时网络 | 先判瞬时再重试 | 6 | 2026-08-17 |')
+      && isMetaEcho('--- echo tail ---\n| 2026-09-10 12:21 | error | 2 | SandBox1 | edit requires reading "<file>" first |'));
+    check('不误伤：同一失败原文本身（无转储信封）仍按真实故障处理',
+      isMetaEcho("=== trying 140.82.114.3 ===\n=== trying 20.27.177.113 ===\nPUSH OK via 20.27.177.113\n[stderr]\ngit : fatal: unable to access 'https://github.com/o/r.git/': Recv failure: Connection was reset") === false);
+
     // ---- ② 实时入箱 ----
     const live = createLiveCollector({ logger, flushMs: 5 });
     live.onEvent(SESSION, { type: 'assistant/message', time: T0, data: {} }); // 无关事件

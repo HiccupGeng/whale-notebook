@@ -25,7 +25,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `~/.dsh/skills/whale-notebook.md` | L2 技能：操作手册（触发词→流程），技能目录热加载 | I 集成段 |
 | `~/.dsh/whale-notebook/` | ★运行数据目录（下详） | D 数据段 |
 | `~/.dsh/whale-notebook/plugin/` | ★插件包源码（模块化，v2 结构；**运行源码权威位**） | D 内（发布镜像于 GitHub 库） |
-| `~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时：插件包部署副本（决策箱面板，现为 0.7.0；由 `plugin/scripts/deploy-web.cjs` 管理，重启 dsh web 生效） | R 运行时段（lifecycle 清单内登记为 installed/absent，`managedBy: scripts/deploy-web.cjs`） |
+| `~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时：插件包部署副本（决策箱面板，现为 0.7.0（权威源已 0.7.1，待 deploy-web 后重启生效）；由 `plugin/scripts/deploy-web.cjs` 管理，重启 dsh web 生效） | R 运行时段（lifecycle 清单内登记为 installed/absent，`managedBy: scripts/deploy-web.cjs`） |
 | `~/.dsh/profiles/web/cordis.patch.yml` | R 段挂载行：web profile 的加载器插入行，只存在标记区内（`# --- whale-notebook 决策箱面板 (deploy-web.cjs managed) ---` … `# --- /whale-notebook panel ---`），同文件可能含其它插件的行 | R 运行时段（摘除走 `uninstall detach`，内部驱动 deploy-web `--undo`） |
 
 ### 运行数据目录 `~/.dsh/whale-notebook/` 内部
@@ -98,7 +98,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 数据 | `store/repo.cjs` | 路径常量 + settings/state/inbox/entries(scope/projects 解析+去引号)/INDEX 已解决墙生成/readEntryText/details 读写（原子替换；移除候选联动归档 detail） | `P`(路径)、读写函数、`listEntries`、`readEntryText`、`buildIndexMd`、`writeDetail` |
 | 记录 | `collector/decoder.cjs` | zstd 多帧 JSONL 会话解码（Node≥22） | `decode` |
 | 记录 | `collector/patterns.cjs` | 坑特征词典（展示/硬拦共用） | 特征表 |
-| 记录 | `collector/scanner.cjs` | 单会话事件抽取（失败/特征；自引用与框架排除） | `scanSession` |
+| 记录 | `collector/scanner.cjs` | 单会话事件抽取（失败/特征；自引用与框架排除；v0.7.1 补「转储/回显」型回声签名 META_DUMP） | `scanSession` |
 | 记录 | `collector/engine.cjs` | 扫描→指纹去重→聚簇→check 追加候选（现象一句话）+ 详情 sidecar（源引用/600 字摘录）；v0.5 增量水位线 + 复发/静默；v0.6 拉取式暂存 + `--rebuild`；v0.6.3 已处置签名索引；v0.7 族合并 | `runScan`、`ingestFresh`、`buildDetailMd` |
 | 记录 | `collector/live.cjs` | v0.5 实时采集器（宿主 `session/event` → 去抖 1.5s → 串行写盘；异常全吞不影响会话；遵守 `autoAdd` 只暂存） | `createLiveCollector` |
 | 记录 | `collector/cli.cjs` | CLI 分发（`--check/--stats/--prewarm/--add/--dry/--full/--rebuild`；`--render-rules` 预览自动段；`--wall` 预览已解决墙全文） | `run` |
@@ -111,7 +111,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作；v0.3：红 ✕ / 判定表模板 / detail 预取 / `[WHALE-RISK]` 观察→红色警示条→一键转人工讨论；v0.4：**双卡** 待审箱｜已解决墙；v0.5：⟳ 先触发增量扫描再刷新、暂存提示；v0.7：💬 讨论消息带同族证据 + 「族×N」小标） | `apply`（browser） |
 | 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 profiles/web/cordis.patch.yml 的标记区） | — |
 | ★部署 | `scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 → `profiles/web/node_modules` + 在 `profiles/web/cordis.patch.yml` 标记区插/摘加载器行（幂等 dry/apply/undo/check；生效需重启 dsh web） | — |
-| 测试 | 9 套自检：`lifecycle`(104) · `ui/server`(45) · `core/privacy·summarize·similarity`(10+10+20) · `collector/engine·engine.dedup·e2e·live`(10+19+60+28) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(13) | **2026-09-10 共 306 断言 + bundle 桩 + 13 打码断言，全绿** | — |
+| 测试 | 9 套自检：`lifecycle`(104) · `ui/server`(45) · `core/privacy·summarize·similarity`(10+10+20) · `collector/engine·engine.dedup·e2e·live`(10+19+60+32) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(13) | **2026-09-10 共 310 断言 + bundle 桩 + 13 打码断言，全绿** | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦；速查见 `lifecycle/README.md`） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单；R 段标 `managedBy`/`markers`，state=probe 由现场探测） | — |
 
@@ -145,7 +145,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 ## 8. 现状与路线图
 
-> 当前 `plugin` 版本 **v0.7.0** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
+> 当前 `plugin` 版本 **v0.7.1** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
 
 | 版本 | 一句话 | 状态 |
 |---|---|---|
@@ -157,9 +157,11 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 0.4.0 | 已解决墙（INDEX + 面板卡）+ 全局/项目两级适用范围（B1） | ✅ |
 | 0.5.x | 增量采集 + 运行中实时入库 + 聚簇索引/复发 + 回声过滤 | ✅ |
 | 0.6.x | 拉取式采集（暂存 →「复盘」入箱）+ `--rebuild` + 类别判定收紧 + 已处置签名去重 | ✅ |
-| **0.7.0** | **同族确定化**：族合并 / `GET /whale/related` / 面板「族×N」/ 技能固定动作 | ✅ 当前 |
+| 0.7.0 | 同族确定化：族合并 / `GET /whale/related` / 面板「族×N」/ 技能固定动作 | ✅ |
+| **0.7.1** | **回声过滤补漏**：`META_DUMP` 三类「转储/回显」签名（转储信封 / 会话记录 JSON 信封 / notebook 表行） | ✅ 当前（宿主半边待重启） |
 
-- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（部署副本已是 0.7.0）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启。
+- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（部署副本现为 0.7.0，v0.7.1 需重新 `deploy-web --apply` 后重启）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启。
+- **回声过滤补漏（v0.7.1）**：v0.5 的 `isMetaEcho` 只挡「助手叙述 / 探针输出」类回声；**工具结果里对历史日志、sidecar、`state.json` 的转储与 notebook 自渲染行**（例：诊断脚本打印的 `==== L### <kind>` 信封、`| C### | … |` 候选行）不含既有强特征，会被当成新事件开行——实测同一物理事件在复盘会话里被重新开行为候选。v0.7.1 新增单条命中即判的 `META_DUMP` 三类签名（会话日志转储信封 / 会话记录 JSON 信封 / notebook 表行），**只认渲染痕迹、不认失败语义**，故同一失败原文照收；`live.selftest` +4 断言（含「不误伤原文」反证）。宿主半边需重启 dsh web 生效。
 - **未来**：会话平面挂载（工具/事件）；B2 项目级自动注入（项目根 AGENTS.md，逐项目知情试点）；复发检测深化（二期）；面板增强（桌宠形态/事件推送，契约已备）。
 
 ## 9. 文档导航（docs/，均为设计记录）
@@ -190,7 +192,7 @@ node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs       # 面板 host
 node ~/.dsh/whale-notebook/plugin/src/core/similarity.selftest.cjs # v0.7 相似度/族判定(20 PASS, 含「不得误并」反证)
 node ~/.dsh/whale-notebook/plugin/src/core/privacy.selftest.cjs | summarize.selftest.cjs   # 打码出口 / 一句话(10+10)
 node ~/.dsh/whale-notebook/plugin/src/collector/engine.selftest.cjs | engine.dedup.selftest.cjs | e2e.selftest.cjs | live.selftest.cjs
-                                                                   # detail 协议(10) / 已处置去重(19) / zstd 全链(60) / 实时(28)
+                                                                   # detail 协议(10) / 已处置去重(19) / zstd 全链(60) / 实时(32，v0.7.1 +4 回声签名断言)
 node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs         # client bundle 桩检查(v0.4–v0.7 结构断言)
 node ~/.dsh/whale-notebook/scripts/redact.test.cjs                 # 打码回归(13)
 node <repo>/tools/sync-release.cjs                                 # 一键同步提交(库内; 镜像→commit→push)

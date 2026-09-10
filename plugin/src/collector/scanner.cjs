@@ -49,10 +49,21 @@ const META_WEAK = [
   // v0.6.2 二次：候选编号 / 探针输出抬头（如「命中 2 条：--- C030 | model-api | …」这类自查输出）
   /\bC\d{3}\b/, /命中 \d+ 条/, /摘录[:：]/, /正则自检/, /候选详情/,
 ];
+// v0.7.1 补漏：「转储/回显」型回声 —— 工具结果里把历史记录重新渲染出来的那类输出
+// 实测漏网：为复核某个旧候选而跑的解码/转储脚本，输出是「转储信封 + 旧失败原文」，
+//   信封与原文都不含 `whale-notebook`、`mine.cjs` 等既有强特征 →
+//   三道过滤（SELF_REF / ENC_DIAG / META_*）全放过，于是同一物理事件被当成新事件开行、
+//   反复「复发」。判据只认**渲染痕迹**（信封/表行），不认失败语义，故不误伤真实报错原文。
+//   ① 会话日志转储信封：`==== L3199 tool/result`（行号+记录类型）、`kind=tool/call`、`type=assistant/message`
+//   ② 会话记录 JSON 信封：`{"type":"tool/result"…}`（含反斜杠转义形态 `{\"type\":\"tool/result\"`）
+//   ③ notebook 自身渲染的表行：候选行 `| C### | … |`、条目行 `| E### | … |`、回声归档行 `| 时间 | 类别 | … |`
+const META_DUMP = /={3,}\s*L\d+\s+(?:tool|assistant|user|session|step|reasoning|text|permission|approval|sandbox|command|todo)[/-]|\bkind=(?:tool|assistant|user|step|session|permission|approval|sandbox|command)[/-]|\btype=(?:tool|assistant|user|step|session)[/-]|\\?"type\\?":\\?"(?:tool\/result|tool\/call|assistant\/(?:message|chunk)|user\/message|reasoning-chunks|text-chunks|tool-call-chunks|step\/(?:start|end)|session|command\/(?:run|done))\\?"|^\|\s*C\d{3}\s*\|[^|\n]*\|[^|\n]*\|[^|\n]*\||^\|\s*E\d{3}\s*\|[^|\n]*\||^\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|[^|\n]*\|[^|\n]*\|/m;
+
 function isMetaEcho(text) {
   const s = String(text == null ? '' : text);
   if (!s) return false;
   if (META_STRONG.test(s)) return true;
+  if (META_DUMP.test(s)) return true; // v0.7.1：转储/回显型回声（单条命中即判）
   let n = 0;
   for (const re of META_WEAK) if (re.test(s)) { n++; if (n >= 2) return true; }
   return false;
@@ -190,5 +201,5 @@ module.exports = {
   collectEvents, collectEventsFrom,
   classifyRecord, classifyToolResult, classifyUserMessage,
   extractToolResult, newSessionCtx, wsFromDir, boundCalls, isMetaEcho,
-  COMMAND_TOOLS, SELF_REF, FRAME_RE, ENC_DIAG_RE, STRONG_USER, META_STRONG, META_WEAK,
+  COMMAND_TOOLS, SELF_REF, FRAME_RE, ENC_DIAG_RE, STRONG_USER, META_STRONG, META_WEAK, META_DUMP,
 };
