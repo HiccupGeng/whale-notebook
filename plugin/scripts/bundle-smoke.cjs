@@ -46,4 +46,9 @@ for (const s of ['deferred', '已暂存', '小本本复盘']) {
 for (const s of ['/whale/related', 'relatedBlock', '同族证据', '族×']) {
   if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7 结构: ' + s);
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据）');
+// v0.7.3 内容断言：讨论落点路由（三态开关 + 固定全局工作区 + 落点写进开局消息）
+for (const s of ['GLOBAL_WS', 'planDiscuss', 'ROUTE_MODES', '讨论落点', 'wh-seg-btn', 'ensureGlobalWorkspace', 'resolveDiscussTarget', '本会话工作区：', '__internals']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.3 结构: ' + s);
+}
+if (!/var discussMode = readRouteMode\(\)/.test(code)) throw new Error('v0.7.3 约定：讨论模式必须从 localStorage 读初值');
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.3 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由）');

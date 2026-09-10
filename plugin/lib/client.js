@@ -18,6 +18,13 @@
 //            宿主按水位线只解新增帧；会话运行中的失败另由宿主 session/event 实时入箱）。
 //   POST /whale/scan             -> {ok, added, bumped, pending, ms}  面板 ⟳ 触发的增量扫描
 //   GET  /whale/live             -> {ok, version, live, watermarks...} 运行状态（自检/排障）
+// v0.7.3（2026-09）：讨论落点路由 —— 💬 不再固定开在「当前会话的工作区」：
+//   候选行「工作区」列含 ≥2 个工作区（跨项目） → 判为全局类，开在固定的「鲸鱼全局」工作区
+//     （C:\DeepSeekHarnes\WhaleGlobal；首次使用时经 workspaces.createDirectory/create 惰性注册并命名）；
+//   只出现在一个项目 → 开在该项目工作区（按 path 末段精确匹配，同名歧义不猜）；
+//   工作区未知 / 未注册 / 同名歧义 → 回退当前工作区，并在 toast 里说明原因；
+//   面板页脚常显三态开关「自动｜🐳 全局｜📁 项目」（选择记 localStorage）供手动覆盖；
+//   落点与依据随每次 toast 报出，并写进新会话的开局消息（本会话工作区：… 路由依据：…）。
 window.__ModuleLoader__.load({
 	id: "@deepseek-ai/dsh-whale-notebook",
 	factory: (require) => {
@@ -76,7 +83,14 @@ window.__ModuleLoader__.load({
 			".wh-abtn-danger:hover{background:rgba(229,72,77,.2);color:#b02a2f}",
 			".wh-text{margin-top:2px;color:var(--dsw-alias-label-secondary,#565b66);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}",
 			".wh-empty{padding:18px 8px;text-align:center;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
-			".wh-foot{flex:none;border-top:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
+			".wh-foot{flex:none;border-top:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));padding:5px 10px 6px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
+			".wh-route{display:flex;align-items:center;gap:5px;margin-bottom:3px}",
+			".wh-route-label{flex:none;font-weight:700;opacity:.9}",
+			".wh-seg{display:flex;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.14));border-radius:6px;overflow:hidden}",
+			".wh-seg-btn{padding:1px 6px;border:none;background:transparent;color:inherit;cursor:pointer;font:600 10px/1.6 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}",
+			".wh-seg-btn+.wh-seg-btn{border-left:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.08))}",
+			".wh-seg-btn:hover{background:rgba(128,128,128,.16)}",
+			".wh-seg-on{background:rgba(90,130,255,.22);color:var(--dsw-alias-label-primary,#24272d)}",
 			".wh-toast{position:fixed;right:14px;bottom:14px;z-index:2147482100;max-width:320px;padding:7px 12px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:#fff;background:rgba(28,32,38,.94);box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transform:translateY(6px);transition:opacity .18s,transform .18s;pointer-events:none}",
 			".wh-toast-on{opacity:1;transform:none}",
 			".wh-alert{display:none;position:fixed;right:8px;bottom:66px;width:300px;z-index:2147482060;background:var(--dsw-alias-bg-base,#ffffff);border:1px solid rgba(229,72,77,.6);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.24);overflow:hidden;font:12px/1.5 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:var(--dsw-alias-label-primary,#24272d)}",
@@ -278,12 +292,14 @@ window.__ModuleLoader__.load({
 			return L.join("\n");
 		}
 		// v0.3：详细讨论（可带风险上报原文 riskText —— 自动处理被阻止后的转人工入口）
-		function discussMessage(r, detail, riskText, related) {
+		function discussMessage(r, detail, riskText, related, route) {
 			var c = contextLine(r);
 			if (!c) return null;
 			var L = [];
 			L.push("【决策箱转入·详细讨论】这条候选从侧边面板转到本会话单独讨论：");
 			L.push(c + detailBlock(detail));
+			// v0.7.3：把「本会话落在哪个工作区、依据什么判的」写进开局消息，开局即知
+			if (route && route.label) L.push("本会话工作区：" + route.label + "（路由依据：" + route.reason + "）");
 			if (riskText) {
 				L.push("");
 				L.push("⚠ 该候选此前尝试「自动处理」时被判定为重大隐患并已阻止，以下是当时的风险上报原文（第一行为固定标记行）：");
@@ -331,6 +347,81 @@ window.__ModuleLoader__.load({
 			return L.join("\n");
 		}
 		//#endregion
+		//#region discuss routing（v0.7.3：讨论落点）
+		// 语义：全局类候选 → 固定「鲸鱼全局」工作区；项目级候选 → 该项目工作区；判不准 → 回退当前工作区。
+		// 判定依据只能来自候选行第 4 列「工作区」（该聚簇出现过的工作区名，最多记 2 个）：出现逗号即 ≥2 个工作区。
+		// scope 是入库审核时才定的语义，此处在点击瞬间只能用这个客观信号，故一律给手动覆盖开关兜底。
+		var GLOBAL_WS = {
+			parent: "C:\\DeepSeekHarnes",
+			name: "WhaleGlobal",
+			path: "C:\\DeepSeekHarnes\\WhaleGlobal",
+			title: "鲸鱼全局"
+		};
+		var ROUTE_STORE_KEY = "whale.discussRoute";
+		var ROUTE_MODES = [
+			{ key: "auto", text: "自动", title: "自动分流：候选出现在 ≥2 个工作区 → 鲸鱼全局；只出现在一个项目 → 该项目工作区" },
+			{ key: "global", text: "🐳 全局", title: "手动覆盖：本面板的讨论一律开到「鲸鱼全局」工作区" },
+			{ key: "project", text: "📁 项目", title: "手动覆盖：一律开到候选所属的项目工作区（未知或不唯一时回退当前工作区）" }
+		];
+		function readRouteMode() {
+			try {
+				var v = window.localStorage.getItem(ROUTE_STORE_KEY);
+				if (v === "auto" || v === "global" || v === "project") return v;
+			} catch (e) { /* 隐私模式/无 storage：退回默认 */ }
+			return "auto";
+		}
+		function writeRouteMode(v) {
+			try { window.localStorage.setItem(ROUTE_STORE_KEY, v); } catch (e) { /* 忽略 */ }
+		}
+		// 路径末段（Windows / POSIX 分隔符都认）
+		function baseName(p) {
+			var s = String(p === undefined || p === null ? "" : p).replace(/[\\/]+$/, "");
+			var i = Math.max(s.lastIndexOf("\\"), s.lastIndexOf("/"));
+			return i >= 0 ? s.slice(i + 1) : s;
+		}
+		// 候选行「工作区」列 → 工作区名数组（空值与 "?" 表示未知，不算一个工作区）
+		function wsNamesOf(cell) {
+			var out = [];
+			var parts = String(cell === undefined || cell === null ? "" : cell).split(/[,，、]/);
+			for (var i = 0; i < parts.length; i++) {
+				var s = parts[i].trim();
+				if (s && s !== "?") out.push(s);
+			}
+			return out;
+		}
+		// 名字 → 侧栏工作区：0 个（没注册）或 ≥2 个（同名歧义）都返回 null —— 不猜
+		function findWorkspace(items, name) {
+			var want = String(name === undefined || name === null ? "" : name);
+			if (!want) return null;
+			var hits = [];
+			for (var i = 0; i < items.length; i++) {
+				var it = items[i];
+				if (!it) continue;
+				if (baseName(it.path) === want || it.title === want) hits.push(it);
+			}
+			return hits.length === 1 ? hits[0] : null;
+		}
+		function wsLabel(items, id) {
+			for (var i = 0; i < items.length; i++) if (items[i] && items[i].workspaceId === id) return items[i].title || baseName(items[i].path);
+			return null;
+		}
+		// 纯函数：候选行 + 工作区列表 + 模式("auto"|"global"|"project") → { kind:"global"|"project"|"current", reason }
+		function planDiscuss(row, items, mode) {
+			var names = wsNamesOf(row && row.ws);
+			if (mode === "global") return { kind: "global", names: names, reason: "手动覆盖：全局" };
+			if (mode === "project") {
+				if (!names.length) return { kind: "current", names: names, reason: "手动覆盖：项目，但候选未记工作区" };
+				var fh = findWorkspace(items, names[0]);
+				if (fh) return { kind: "project", names: names, ws: fh, reason: "手动覆盖：项目 " + names[0] };
+				return { kind: "current", names: names, reason: "手动覆盖：项目 " + names[0] + " 不在侧栏" };
+			}
+			if (names.length >= 2) return { kind: "global", names: names, reason: "出现在 " + names.length + " 个工作区（跨项目）" };
+			if (!names.length) return { kind: "global", names: names, reason: "工作区未知，保守放全局" };
+			var hit = findWorkspace(items, names[0]);
+			if (hit) return { kind: "project", names: names, ws: hit, reason: "仅出现在 " + names[0] };
+			return { kind: "current", names: names, reason: "侧栏无工作区 " + names[0] + "（或同名歧义）" };
+		}
+		//#endregion
 		//#region panel
 		function apply(ctx) {
 			if (typeof document === "undefined") return;
@@ -353,6 +444,9 @@ window.__ModuleLoader__.load({
 			var alertEl = null;
 			var alertTimer = null;
 			var AUTO_VISIBLE = false; // v0.4.1：⚡ 自动处理入口暂时隐藏（投递当前会话+警示条效果用户不认可）；置 true 恢复
+			var discussMode = readRouteMode(); // v0.7.3：讨论落点 auto|global|project（localStorage 记忆）
+			var globalWsId = null;             // v0.7.3：「鲸鱼全局」workspaceId 缓存（惰性注册后记住）
+			var globalWsPromise = null;        // 并发合并：连点多条候选只准备一次
 
 			var box = el("div", "wh-box");
 			// 入口 tab A：待审（有待审核候选才显示；红徽 = 待审数）
@@ -394,7 +488,24 @@ window.__ModuleLoader__.load({
 			card.appendChild(head);
 			var list = el("div", "wh-list");
 			card.appendChild(list);
-			var foot = el("div", "wh-foot", "候选来自 inbox.md｜删除移入 archive");
+			var foot = el("div", "wh-foot");
+			// v0.7.3：讨论落点三态开关（常显在页脚——状态一直看得见，误判一键纠正）
+			var routeBar = el("div", "wh-route");
+			routeBar.appendChild(el("span", "wh-route-label", "讨论落点"));
+			var seg = el("div", "wh-seg");
+			var routeBtns = [];
+			for (var mi = 0; mi < ROUTE_MODES.length; mi++) {
+				(function (m) {
+					var b = el("button", "wh-seg-btn", m.text);
+					b.title = m.title;
+					b.addEventListener("click", function (ev) { ev.stopPropagation(); setDiscussMode(m.key); });
+					routeBtns.push({ key: m.key, el: b });
+					seg.appendChild(b);
+				})(ROUTE_MODES[mi]);
+			}
+			routeBar.appendChild(seg);
+			foot.appendChild(routeBar);
+			foot.appendChild(el("div", "wh-foot-note", "候选来自 inbox.md｜删除移入 archive"));
 			card.appendChild(foot);
 			box.appendChild(card);
 			// 卡 B：已解决墙（v0.4；轻口径：入库=已处理；与文档墙 INDEX.md 同源）
@@ -441,6 +552,21 @@ window.__ModuleLoader__.load({
 				}, 2800);
 			}
 
+			// v0.7.3：讨论落点开关（三态：自动 / 强制🐳全局 / 强制📁项目）
+			function paintRoute() {
+				for (var i = 0; i < routeBtns.length; i++) {
+					if (routeBtns[i].key === discussMode) routeBtns[i].el.classList.add("wh-seg-on");
+					else routeBtns[i].el.classList.remove("wh-seg-on");
+				}
+			}
+			function setDiscussMode(k) {
+				discussMode = k;
+				writeRouteMode(k);
+				paintRoute();
+				toast("讨论落点：" + (k === "auto" ? "自动分流" : k === "global" ? "强制 🐳 鲸鱼全局" : "强制 📁 项目工作区"));
+			}
+			paintRoute();
+
 			function renderRows() {
 				list.textContent = "";
 				if (rows.length === 0) {
@@ -468,7 +594,7 @@ window.__ModuleLoader__.load({
 							acts.appendChild(b1);
 						}
 						var b2 = el("button", "wh-abtn", "💬");
-						b2.title = "详细讨论：开新会话并携带该候选上下文与后台详情";
+						b2.title = "详细讨论：开新会话并携带该候选上下文与后台详情（落点由页脚「讨论落点」开关决定）";
 						var b3 = el("button", "wh-abtn wh-abtn-danger", "✕");
 						b3.title = "删除：视为已解决/无需解决，移入归档（可恢复）";
 						acts.appendChild(b2);
@@ -630,31 +756,97 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- 新会话载体（详细讨论 / 风险转人工共用）----
-			function openDiscussion(r, msg) {
+			// v0.7.3：先定落点、再建会话；消息由 buildMsg(route) 现场构造（好把落点与依据写进开局消息）
+			function wsItems() {
+				try { return (workspaces && workspaces.list.getSnapshot().items) || []; } catch (e) { return []; }
+			}
+			// 「鲸鱼全局」工作区：首次使用时惰性准备（建目录 → 注册 → 命名），成功后缓存；
+			// 失败不缓存（下次可重试），且**不**静默落到项目工作区 —— 由调用方报错中止。
+			function ensureGlobalWorkspace() {
+				if (globalWsId) return Promise.resolve(globalWsId);
+				if (globalWsPromise) return globalWsPromise;
+				if (!workspaces) return Promise.reject(new Error("当前环境无工作区服务"));
+				globalWsPromise = Promise.resolve()
+					.then(function () {
+						var hit = findWorkspace(wsItems(), GLOBAL_WS.name) || findWorkspace(wsItems(), GLOBAL_WS.title);
+						if (hit) return hit.workspaceId;
+						return Promise.resolve()
+							.then(function () { return workspaces.createDirectory(GLOBAL_WS.parent, GLOBAL_WS.name); })
+							.catch(function () { return null; })   // 目录已存在即走到这里
+							.then(function () { return workspaces.create({ path: GLOBAL_WS.path }); })
+							.then(function (view) {
+								return Promise.resolve()
+									.then(function () { return workspaces.rename(view.workspaceId, GLOBAL_WS.title); })
+									.then(function () { return view.workspaceId; }, function () { return view.workspaceId; });
+							});
+					})
+					.then(function (id) {
+						if (!id) throw new Error("工作区 id 解析为空");
+						globalWsId = id;
+						return id;
+					}, function (err) {
+						globalWsPromise = null;
+						throw err;
+					});
+				return globalWsPromise;
+			}
+			function resolveDiscussTarget(r, mode, retried) {
+				var plan = planDiscuss(r, wsItems(), mode);
+				// 工作区基线还没到（刚刷新页面就点 💬）时先拉一次再判，避免把「还没加载」误判成「未注册」而回退；只重试一次
+				if (!retried && plan.kind === "current" && wsItems().length === 0 && workspaces && typeof workspaces.refresh === "function") {
+					return Promise.resolve(workspaces.refresh()).then(
+						function () { return resolveDiscussTarget(r, mode, true); },
+						function () { return resolveDiscussTarget(r, mode, true); }
+					);
+				}
+				if (plan.kind === "global") {
+					return ensureGlobalWorkspace().then(function (id) {
+						return { workspaceId: id, label: GLOBAL_WS.title, reason: plan.reason };
+					});
+				}
+				if (plan.kind === "project" && plan.ws) {
+					return Promise.resolve({
+						workspaceId: plan.ws.workspaceId,
+						label: plan.ws.title || baseName(plan.ws.path),
+						reason: plan.reason
+					});
+				}
+				var curWs = workspaceIdOf(sessions, workspaces, currentSessionId(sessions));
+				return Promise.resolve({
+					workspaceId: curWs,
+					label: (curWs !== undefined && curWs !== null ? wsLabel(wsItems(), curWs) : null) || "当前工作区",
+					reason: plan.reason + " → 回退当前工作区"
+				});
+			}
+			function openDiscussion(r, buildMsg, mode) {
 				if (!sessions) return toast("当前环境无会话服务，无法开新会话");
-				var cur = currentSessionId(sessions);
-				var workspaceId = workspaceIdOf(sessions, workspaces, cur);
-				var opts = workspaceId !== undefined ? { workspaceId: workspaceId } : {};
-				sessions.create(opts).then(function (newId) {
-					return waitBinding(sessions, newId, 5000).then(function (bind) {
-						if (bind) {
-							try {
-								return bind.session.prompt([{ type: "text", text: msg }], "queue").then(function () {
-									return newId;
-								}, function () {
-									return newId;
-								});
-							} catch (e) { return newId; }
-						}
-						return newId;
+				resolveDiscussTarget(r, mode || "auto").then(function (t) {
+					var msg = buildMsg(t);
+					if (!msg) return toast("候选数据缺失，无法构造消息");
+					var opts = (t.workspaceId !== undefined && t.workspaceId !== null) ? { workspaceId: t.workspaceId } : {};
+					return sessions.create(opts).then(function (newId) {
+						return waitBinding(sessions, newId, 5000).then(function (bind) {
+							if (bind) {
+								try {
+									return bind.session.prompt([{ type: "text", text: msg }], "queue").then(function () {
+										return newId;
+									}, function () {
+										return newId;
+									});
+								} catch (e) { return newId; }
+							}
+							return newId;
+						});
+					}, function (err) {
+						toast("新建会话失败：" + (err && err.message ? err.message : String(err)));
+						return null;
+					}).then(function (newId) {
+						if (!newId) return;
+						sessions.open(newId);
+						toast("已开讨论会话：" + r.id + " → " + t.label + "（" + t.reason + "）");
 					});
 				}, function (err) {
-					toast("新建会话失败：" + (err && err.message ? err.message : String(err)));
-					return null;
-				}).then(function (newId) {
-					if (!newId) return;
-					sessions.open(newId);
-					toast("已为新候选开独立会话：" + r.id);
+					toast("鲸鱼全局工作区不可用：" + (err && err.message ? err.message : String(err)) + "（未开会话）");
 				});
 			}
 
@@ -682,8 +874,8 @@ window.__ModuleLoader__.load({
 					btnGo.addEventListener("click", function () {
 						hideRiskAlert();
 						apiDetail(r.id).then(function (detail) {
-							var msg = discussMessage(r, detail, fullText || reason);
-							if (msg) openDiscussion(r, msg);
+							// v0.7.3：与 💬 共用同一套落点路由（自动/强制全局/强制项目）
+							openDiscussion(r, function (t) { return discussMessage(r, detail, fullText || reason, null, t); }, discussMode);
 						});
 					});
 					btnOk.addEventListener("click", hideRiskAlert);
@@ -748,10 +940,9 @@ window.__ModuleLoader__.load({
 
 			function doDiscuss(r) {
 				// v0.7：先取详情与「同族/相似候选」再构造消息——新会话开局即带确定依据
+				// v0.7.3：落点由页脚三态开关决定（自动 / 强制🐳全局 / 强制📁项目）
 				Promise.all([apiDetail(r.id), apiRelated(r.id)]).then(function (res) {
-					var msg = discussMessage(r, res[0], null, res[1]);
-					if (!msg) return toast("候选数据缺失，无法构造消息");
-					openDiscussion(r, msg);
+					openDiscussion(r, function (t) { return discussMessage(r, res[0], null, res[1], t); }, discussMode);
 				});
 			}
 
@@ -824,6 +1015,19 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		exports.apply = apply;
+		// v0.7.3：把讨论路由的纯函数暴露给自测（bundle 不能 require，这是唯一可测缝隙）
+		exports.__internals = {
+			GLOBAL_WS: GLOBAL_WS,
+			ROUTE_MODES: ROUTE_MODES,
+			ROUTE_STORE_KEY: ROUTE_STORE_KEY,
+			baseName: baseName,
+			wsNamesOf: wsNamesOf,
+			findWorkspace: findWorkspace,
+			wsLabel: wsLabel,
+			planDiscuss: planDiscuss,
+			readRouteMode: readRouteMode,
+			writeRouteMode: writeRouteMode
+		};
 		return module.exports;
 	}
 });
