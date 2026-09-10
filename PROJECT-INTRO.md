@@ -110,7 +110,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 入口 | `lib/index.js` | cordis 插件入口 host half：注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`GET /whale/solved`、`GET /whale/entry`、`GET /whale/live`、`GET /whale/related`、`POST /whale/inbox/delete`、`POST /whale/scan` | `apply` |
 | 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作；v0.3：红 ✕ / 判定表模板 / detail 预取 / `[WHALE-RISK]` 观察→红色警示条→一键转人工讨论；v0.4：**双卡** 待审箱｜已解决墙；v0.5：⟳ 先触发增量扫描再刷新、暂存提示；v0.7：💬 讨论消息带同族证据 + 「族×N」小标） | `apply`（browser） |
 | 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 profiles/web/cordis.patch.yml 的标记区） | — |
-| ★部署 | `scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 → `profiles/web/node_modules` + 在 `profiles/web/cordis.patch.yml` 标记区插/摘加载器行（幂等 dry/apply/undo/check；生效需重启 dsh web） | — |
+| ★部署 | `scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 → `profiles/web/node_modules` + 在 `profiles/web/cordis.patch.yml` 标记区插/摘加载器行（幂等 dry/apply/undo/check；**v0.7.1 起 `check` 含与权威源逐文件字节对账**，副本陈旧即 exit 1——避免「check 通过却没部署」；生效需重启 dsh web） | — |
 | 测试 | 9 套自检：`lifecycle`(104) · `ui/server`(45) · `core/privacy·summarize·similarity`(10+10+20) · `collector/engine·engine.dedup·e2e·live`(10+19+60+32) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(13) | **2026-09-10 共 310 断言 + bundle 桩 + 13 打码断言，全绿** | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦；速查见 `lifecycle/README.md`） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单；R 段标 `managedBy`/`markers`，state=probe 由现场探测） | — |

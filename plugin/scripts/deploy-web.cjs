@@ -107,8 +107,40 @@ function undoPatchText() {
   return text + '\n';
 }
 
+// v0.7.1：--check 原先只核结构（包目录在、package.json 可解析、patch 行在位），
+//   副本内容陈旧照样「自检通过」——实测踩过：源已 0.7.1、副本仍是 0.7.0，check 却报通过，
+//   于是「重启了却没生效」。这里补一层只读的逐文件字节对账（权威源 → 副本）：
+//   缺失/内容不同 = 漂移（判失败，需 --apply）；副本多余文件只提示、不判失败
+//   （dsh/pnpm 重装可能在包目录留下附带文件，不该因此让 check 变脆）。
+function diffDeployed() {
+  const drift = { missing: [], differ: [], extra: [] };
+  if (!fs.existsSync(TARGET_ROOT)) return drift;
+  const walk = (dir, base, acc) => {
+    for (const en of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (en.name === 'node_modules' || en.name === '.git') continue;
+      const p = path.join(dir, en.name);
+      const rel = path.relative(base, p);
+      if (en.isDirectory()) walk(p, base, acc);
+      else if (en.isFile()) acc.push(rel);
+    }
+    return acc;
+  };
+  const src = walk(SRC_ROOT, SRC_ROOT, []);
+  const dst = walk(TARGET_ROOT, TARGET_ROOT, []);
+  const dstSet = new Set(dst);
+  for (const rel of src) {
+    const dp = path.join(TARGET_ROOT, rel);
+    if (!dstSet.has(rel)) { drift.missing.push(rel); continue; }
+    if (!fs.readFileSync(path.join(SRC_ROOT, rel)).equals(fs.readFileSync(dp))) drift.differ.push(rel);
+  }
+  const srcSet = new Set(src);
+  for (const rel of dst) if (!srcSet.has(rel)) drift.extra.push(rel);
+  return drift;
+}
+
 function verifyDeployed() {
   const errs = [];
+  const notes = [];
   if (!fs.existsSync(TARGET_ROOT)) errs.push('包目录不存在: ' + TARGET_ROOT);
   else {
     try {
@@ -119,6 +151,15 @@ function verifyDeployed() {
       if (!fs.existsSync(cp)) errs.push('目标 client bundle 缺失');
       if (!pkg.dsh || !pkg.dsh.client) errs.push('目标 dsh.client 缺失');
     } catch (e) { errs.push('目标 package.json 解析失败: ' + e.message); }
+    const drift = diffDeployed();
+    const bad = drift.missing.length + drift.differ.length;
+    if (bad) {
+      errs.push('副本内容与权威源不一致 ' + bad + ' 个文件（副本陈旧）——需执行 deploy-web.cjs --apply');
+      for (const f of drift.missing.slice(0, 5)) errs.push('  · 副本缺失: ' + f);
+      for (const f of drift.differ.slice(0, 5)) errs.push('  · 内容不同: ' + f);
+      if (bad > 10) errs.push('  · …（其余 ' + (bad - 10) + ' 个）');
+    }
+    if (drift.extra.length) notes.push('副本多余 ' + drift.extra.length + ' 个文件（不影响判定）: ' + drift.extra.slice(0, 3).join(', '));
   }
   const pt = patchText();
   if (!pt.includes('- id: whale-notebook')) errs.push('profile patch 缺少 whale-notebook 行');
@@ -127,7 +168,8 @@ function verifyDeployed() {
     for (const e of errs) out('  - ' + e);
     return false;
   }
-  out('[自检通过] 包已复制 + patch 行在位。重启 dsh web 后生效。');
+  for (const n of notes) out('[自检提示] ' + n);
+  out('[自检通过] 副本与权威源逐字节一致 + patch 行在位。重启 dsh web 后生效。');
   return true;
 }
 

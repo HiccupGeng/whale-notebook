@@ -1,6 +1,6 @@
 # dsh-whale-notebook 插件包（v0.7.1：回声过滤补漏 · 同族确定化 · 拉取式采集 · 实时入库 · 决策箱双卡 = 待审箱 + 已解决墙）
 
-鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。**v0.6.1：`--rebuild` 清派生状态后从头梳理全部历史（`--rebuild --add` 一条命令扫完入箱）**。**v0.6.2：回声签名扩充 + 类别正则收紧（真实历史从零重扫候选 36 → 26，且无类别误判）**。**v0.6.3：已处置签名去重——把归档表当事实源，修掉「state 重置/重扫后同一个坑重复开行」（同一行曾先后开出 3 个编号）**。**v0.7.0：同族（family）确定化——`src/core/similarity.cjs` + L1 族合并 + `GET /whale/related` + 面板「族×N」，让「还有类似的问题可以一并处理」由程序算出、可复现可解释，而不是模型即兴归纳**。**v0.7.1：回声过滤补漏——工具结果里对历史日志/sidecar/`state.json` 的转储与 notebook 自渲染行（转储信封 `==== L### <kind>`、候选行 `| C### | … |`）不再被当成新事件开行（此前同一物理事件在复盘会话里被重新开行）；`META_DUMP` 只认渲染痕迹、不认失败语义，故同一失败原文照收**。
+鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。**v0.6.1：`--rebuild` 清派生状态后从头梳理全部历史（`--rebuild --add` 一条命令扫完入箱）**。**v0.6.2：回声签名扩充 + 类别正则收紧（真实历史从零重扫候选 36 → 26，且无类别误判）**。**v0.6.3：已处置签名去重——把归档表当事实源，修掉「state 重置/重扫后同一个坑重复开行」（同一行曾先后开出 3 个编号）**。**v0.7.0：同族（family）确定化——`src/core/similarity.cjs` + L1 族合并 + `GET /whale/related` + 面板「族×N」，让「还有类似的问题可以一并处理」由程序算出、可复现可解释，而不是模型即兴归纳**。**v0.7.1：回声过滤补漏——工具结果里对历史日志/sidecar/`state.json` 的转储与 notebook 自渲染行（转储信封 `==== L### <kind>`、候选行 `| C### | … |`）不再被当成新事件开行（此前同一物理事件在复盘会话里被重新开行）；`META_DUMP` 只认渲染痕迹、不认失败语义，故同一失败原文照收**。**v0.7.1 另修 `deploy-web --check`：补与权威源逐文件字节对账，副本陈旧即 exit 1（此前只核结构，实测出现「check 通过但副本仍是 0.7.0、重启后没生效」）。**
 
 ## 模块地图
 
@@ -80,7 +80,7 @@ plugin/
 ```powershell
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --apply    # 复制包 + patch ~/.dsh/profiles/web/cordis.patch.yml
-node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --check    # 自检
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --check    # 自检（v0.7.1 起含与权威源逐文件字节对账：副本陈旧 exit 1）
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply [--yes]  # 回退
 ```
 
