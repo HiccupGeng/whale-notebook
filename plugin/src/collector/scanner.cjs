@@ -12,7 +12,9 @@ const COMMAND_TOOLS = ['pwsh', 'bash', 'node', '?'];
 // 命令类工具成功结果的自引用排除（mine/统计/inbox 文本含类别词，不能当新发现）
 const SELF_REF = /whale-notebook|mine\.cjs|--check|--stats|--prewarm|whale notebook|次 \| 工作区|inbox\.md|\| C\d\d+/;
 // 系统框架/长叙述排除（AGENTS 注入、技能目录、技能正文、审核清单等）
-const FRAME_RE = /system-reminder|Current runtime context|Instructions from:|workspace instructions|whale-notebook:rules|skill_content|available_skills|whale-notebook|小本本|复盘|候选|拟规则|E0\d\d/;
+// v0.6.2：补「讨论本机制本身」的元叙述（例如『帮我梳理运行记录、生成经验避坑』），
+//   这类用户请求虽是真用户消息，但属元讨论，不是可沉淀的运行坑。
+const FRAME_RE = /system-reminder|Current runtime context|Instructions from:|workspace instructions|whale-notebook:rules|skill_content|available_skills|whale-notebook|小本本|复盘|候选|拟规则|E0\d\d|生成经验|经验库|避坑|运行记录/;
 // v2.1：encoding 类别的自引用过滤——为定位编码问题而跑的解码/探针脚本，其命令行与输出
 // 天然含“乱码/????/GBK/代码页”等特征词，会被当成新发现反复进箱（实测 C001 之后新增 9 条回声）。
 // 只过滤诊断签名（采集器源码名/探针输出标记），不碰真实用户报障与真实损坏证据。
@@ -27,7 +29,11 @@ const STRONG_USER = /编码|乱码|报错|失败|坑|EPERM|拒绝|超时|token|�
 //   STRONG：单条命中即判回声（采集器自身产物、探针输出抬头等唯一性标记）
 //   WEAK  ：需 ≥2 条同时命中（弱特征，单独出现时很可能是真实故障文本）
 // 命中者不直接丢弃：标记 meta=true 交给 engine 落档（archive/echo-*.md）后再排除，全程可审计。
-const META_STRONG = /whale-notebook|mine\.cjs|inbox\.md|details[\\/]C\d{3}|\[dry 只读\]|新发现 \d+ 条|待审共|byCat|byTool|ENC_DIAG|SELF_REF|(?:collector|scanner|decoder|patterns|engine|live|summarize|repo|agents|schema|server|cli)\.(?:selftest\.)?c?js|bundle-smoke|deploy-web|sync-release|clusterKey|fpOf|ingestFresh|AUTO_VISIBLE|frame layout|endNL=|P1-start|FULL FAILING COMMAND|variant A|ContentType without charset|hex:E4|提交详情|本地核对|远程库元信息|dsh-global-rules|fetch upstream main|real scanner|patched copy/i;
+// v0.6.2 扩充（实测漏网的回声类别）：
+//   ① 简报技能自己的扫描输出（sessions:/workspaces:/### WORKSPACE:/filesWritten:/recentFiles:/real user msgs:/user: N | asst: N）
+//   ② DSH 源码与 profile 摘录（行号前缀 `361: …`、YAML 片段 `- id: …`）
+//   ③ zstd 十六进制转储（连续 ≥8 个 hex 字节对）
+const META_STRONG = /whale-notebook|mine\.cjs|inbox\.md|details[\\/]C\d{3}|\[dry 只读\]|新发现 \d+ 条|待审共|byCat|byTool|ENC_DIAG|SELF_REF|(?:collector|scanner|decoder|patterns|engine|live|summarize|repo|agents|schema|server|cli)\.(?:selftest\.)?c?js|bundle-smoke|deploy-web|sync-release|clusterKey|fpOf|ingestFresh|AUTO_VISIBLE|frame layout|endNL=|P1-start|FULL FAILING COMMAND|variant A|ContentType without charset|hex:E4|提交详情|本地核对|远程库元信息|dsh-global-rules|fetch upstream main|real scanner|patched copy|### WORKSPACE:|filesWritten:|recentFiles:|real user msgs:|^\s*\d{1,5}: \S|(?:\b[0-9A-Fa-f]{2}\b[ ]){7,}/im;
 const META_WEAK = [
   /cordis/i, /plugin-group/i, /dsh-host-webserver/i, /ctx\.router/i, /dump-config/i,
   /session\.jsonl\.zstd/i, /frames=\d+/, /midLineFrames/i, /gbk decode/i, /utf8 parse OK/i,
@@ -37,6 +43,11 @@ const META_WEAK = [
   /inbox HTTP/i, /"ok":true,"pending"/,
   /repo\?/, /--- remote ---/, /--- gh ---/,
   /AppData\\Roaming\\npm/i, /@deepseek-ai/,
+  // v0.6.2：简报探针与源码摘录的弱特征（单独出现不算，≥2 条同时命中才判回声）
+  /\bsessions: \d+/i, /\bworkspaces: \d+/i, /\buser: \d+ \| asst: \d+/i, /\basst: \d+/i,
+  /disabled: true/, /- id: /i, /service-unavailable/i, /\bbyCat\b/i,
+  // v0.6.2 二次：候选编号 / 探针输出抬头（如「命中 2 条：--- C030 | model-api | …」这类自查输出）
+  /\bC\d{3}\b/, /命中 \d+ 条/, /摘录[:：]/, /正则自检/, /候选详情/,
 ];
 function isMetaEcho(text) {
   const s = String(text == null ? '' : text);

@@ -15,7 +15,8 @@ fs.mkdirSync(nb, { recursive: true });
 
 const repo = require('../store/repo.cjs');
 const { createLiveCollector } = require('./live.cjs');
-const { classifyRecord, newSessionCtx, extractToolResult } = require('./scanner.cjs');
+const { classifyRecord, newSessionCtx, extractToolResult, isMetaEcho, classifyUserMessage } = require('./scanner.cjs');
+const { PATTERNS } = require('./patterns.cjs');
 
 let fails = 0;
 function check(name, cond, extra) {
@@ -54,6 +55,34 @@ function evResult(cid, text, isError, t) {
     const e3 = classifyRecord({ type: 'user/message', time: T0, data: { content: [{ type: 'text', text: '这个中文乱码报错又出现了，帮我看看' }] } }, st2);
     check('用户报障叙述 → encoding 事件', !!e3 && e3.cat === 'encoding' && e3.tool === 'user/message', e3);
     check('系统注入/技能框架文本被排除', classifyRecord({ type: 'user/message', time: T0, data: { content: [{ type: 'text', text: 'system-reminder: 乱码报错 token 密钥 失败' }] } }, st2) === null);
+
+    // ---- ①b v0.6.2：回声签名扩充 + 类别误判收紧 ----
+    check('回声签名：简报探针输出', isMetaEcho('### WORKSPACE: SandBox1 | <path> filesWritten: ["<file>"]')
+      && isMetaEcho('workspaces: 3 ### SandBox1 | sessions: 4 | filesWritten: 8 | recentFiles: 20')
+      && isMetaEcho('sessions: 6 --- 2026/8/17 | cwd <path> real user msgs: 14'), 'briefing probe');
+    check('回声签名：源码摘录 / YAML 片段 / 十六进制转储',
+      isMetaEcho("361: # per-session realm would answer 'service-unavailable' for every browser call.")
+      && isMetaEcho("- . > disabled: true # == @deepseek-ai/dsh-base - id: llm name: '@deepseek-ai/dsh-llm'")
+      && isMetaEcho('28 B5 2F FD 04 58 ED 04 00 B2 CA 23 21 50 69 9C 03'), 'excerpt/hex');
+    check('不误伤：真实权限错误不算回声', isMetaEcho('ERROR: Cannot read configuration file due to insufficient permissions.') === false);
+    const sb = PATTERNS.find((p) => p.id === 'sandbox-file');
+    check('权限类文本归口 sandbox-file', sb.re.test('Cannot read configuration file due to insufficient permissions'));
+    const ma = PATTERNS.find((p) => p.id === 'model-api');
+    check('收紧后不再误命中：文件名清单里的 429 / insufficient permissions',
+      ma.re.test('0 \\S3\\某剧选中 重命名 把后缀 .pdf 去掉 即可观看.txt 1023316983 \\S5\\x.mp4') === false
+      && ma.re.test('Cannot read configuration file due to insufficient permissions') === false
+      && ma.re.test('HTTP 429 too many requests') === true);
+    check('元讨论用户请求被排除（生成经验/避坑/运行记录）',
+      classifyUserMessage({ at: T0, text: '帮我梳理本机 DSH 所有的运行记录，生成经验以便避开之前已经遇到的坑，比如命令编码问题', ws: 'W', sid: 's1' }) === null);
+    check('真实用户报障仍照常收（未命中框架词）',
+      (classifyUserMessage({ at: T0, text: '这个中文乱码报错又出现了，帮我看看', ws: 'W', sid: 's1' })?.cat) === 'encoding');
+    // v0.6.2 二次：探针自查输出（含候选编号）与 ssh 鉴权归口
+    check('回声签名：含候选编号的自查输出',
+      isMetaEcho('命中 2 条：\n--- C030 | model-api | LearningWebMediaCenter | ERROR ( message:Configuration error\n    摘录: insufficient permissions'));
+    const gn = PATTERNS.find((p) => p.id === 'git-net');
+    check('ssh 鉴权失败归口 git-net（不被权限规则抢走）',
+      gn.re.test('ssh : Warning: Permanently added ... Permission denied (publickey)')
+      && sb.re.test('Permission denied (publickey)') === false);
 
     // ---- ② 实时入箱 ----
     const live = createLiveCollector({ logger, flushMs: 5 });

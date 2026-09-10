@@ -64,6 +64,8 @@ v0.5 语义要点：**增量采集**——`state.json` v2 记每个会话日志�
 
 v0.5.1 补充：**自引用/探针回声过滤**——`SELF_REF`/`ENC_DIAG_RE` 原先只作用于成功结果，`error` 类绕过，导致「维修采集器自身」的失败与探针输出全部进箱。新增 `scanner.isMetaEcho()` 两级签名（STRONG 单条命中即判；WEAK 需 ≥2 条同时命中，避免误伤真实故障文本），命中者标 `meta=true` 后由 engine **落档 `archive/echo-<日期>.md` 再排除**（不静默丢弃），扫描输出报「自引用回声过滤 N 组/M 条」，`GET /whale/live` 同步计数。效果：同一份真实历史新候选 **26 → 2**（留下的是真的沙箱拒绝坑）。
 
+v0.6.2 补充（真实从零重扫三轮迭代而来）：① 回声签名扩充——简报技能自己的扫描输出（`### WORKSPACE:`/`filesWritten:`/`recentFiles:`/`real user msgs:`/`sessions: N`/`workspaces: N`/`asst: N`）、DSH 源码与 profile 摘录（行号前缀 `361: …`、YAML `- id: …`、`disabled: true`）、zstd 十六进制转储、含候选编号的自查输出（`C030 | model-api | …`）全部识别为回声；用户叙述侧补 `生成经验|经验库|避坑|运行记录` 框架词（元讨论不算运行坑）。② 类别正则收紧——`model-api` 原 `/429|insufficient|balance/` 会把「文件名清单里的字节数 429」「insufficient permissions」误判为模型 API 错，现改为限流/配额语境；权限类文本（`insufficient permissions`/`access is denied`/`拒绝访问`）归口 `sandbox-file`，而 ssh 的 `Permission denied (publickey)`、`Host key verification failed` 归口 `git-net`。效果：真实历史从零重扫的候选 36 → **26**，且无类别误判。
+
 v0.6 语义要点：**拉取式（pull）**——`settings.autoAdd=false` 时，`--check` 照常增量扫描并推进水位线/指纹（8ms、0 token），但新发现不写 `inbox.md`，而是合并进 `state.json` 的 `deferred` 摘要（`{cat,text,n,first,last,ws[],refs[],excerpt}`，上限 `maxDeferred`）；用户主动说「小本本复盘 / 待审核箱」时才 `mine.cjs --add` 把暂存冲入待审箱（重建候选行 + `details/C###.md`，曾经处置过的标「复发（原 C0xx）」）。**已在待审箱里的候选不受影响**：命中共聚簇时仍只累加次数（不新增行）。**提醒句随开关二选一**（`agents.cjs`：注入文本必须与实际行为一致）：拉取式下只报一行「新发现 N 组已暂存（未入箱）」，不展开清单、不询问审核，比自动模式更省 token。**面板**：`GET /whale/inbox` 附带 `deferred` 组数，仅有暂存时候选入口不隐藏，卡片提示「回复『小本本复盘』入箱后审核」。实时采集（`liveCapture`）同样遵守 `autoAdd`：关掉也只暂存、不写箱。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md` §4.7。
 
 ```powershell
