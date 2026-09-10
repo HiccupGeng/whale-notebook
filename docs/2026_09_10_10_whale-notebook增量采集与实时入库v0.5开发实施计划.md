@@ -1,0 +1,185 @@
+# whale-notebook 增量采集与实时入库 v0.5 开发实施计划
+
+> 日期：2026-09-10 ｜ 版本：v0.5.0 ｜ 状态：已实施并验证（本机实测 + 5 套自检全绿）
+> 上游文档：《2026_09_09_16_whale-notebook插件化架构设计.md》《2026_09_09_22_whale-notebook决策箱v0.3实施计划.md》《2026_09_09_23_whale-notebook已解决墙与分类v0.4实施计划.md》
+
+## 1. 背景与目标
+
+v0.4 及以前，采集（`mine.cjs --check`）每次都**全量重读全部会话日志**：13 个会话 / 约 23 MB / 约 6 万个 zstd 帧，耗时 2.9～4.2 秒，且随历史增长线性恶化；「运行中刚发生的失败」要等到下一次扫描才可能进箱。
+
+本次要解决三件事：
+
+| 编号 | 目标 | 验收口径 |
+|---|---|---|
+| G1 | 增量扫描：跳过未更新的会话日志，只解新增部分 | 热启动耗时 < 100 ms、读取 0 字节；全量重扫结果与增量结果一致 |
+| G2 | 运行中「反复重试且失败」实时进待审箱 | 无需等待扫描、不消耗模型 token、不打断会话 |
+| G3 | 不产生重复候选；已处置候选复发要能看见 | 同一坑跨轮次累加次数；复发重开候选并标注来源 |
+
+非目标（本次不做）：告警推送/桌宠通知；跨机同步；把原始会话文本写入经验库。
+
+## 2. 前提核实（实测数据，非推断）
+
+| 结论 | 证据 |
+|---|---|
+| 采集全程**不调用模型**，token 消耗为 0 | `collector/*` 仅用 `node:zlib` + 正则；全仓无 LLM/网络调用 |
+| 全量扫描 13 文件 / 22.93 MB / 59,318 帧 ≈ 2.9～4.2 s | 三次连跑计时（只读探针） |
+| 会话日志是**纯追加的多帧 zstd**，每帧以 `\n` 结尾 | 59,318 帧中跨行帧 = 0，坏帧 = 0，平均 400 B/帧 |
+| 帧起点在文件任意时刻都与 zstd magic 对齐 | `decoder.scanFrames` 可从任意帧边界续扫，无需回收半行 |
+| 宿主提供会话事件总线 `session/event` | DSH 内核 13 个包在用（如 `dsh-file-reference-local`）；事件对象与磁盘记录同形 `{type,time,data}` |
+| 真正消耗 token 的位置 | ①（已隐藏的）⚡ 自动处理投递长指令；② 每会话列出待审清单；③ 复盘时翻原始日志 |
+
+## 3. 方案总览
+
+```
+                       ┌─────────────── 批扫（mine.cjs / 面板 ⟳ / POST /whale/scan）
+会话日志 session.jsonl.zstd ──┤  decoder.decodeLinesFrom(file, offset)：只读新增字节、按帧边界续扫
+                       └─────────────── 实时（宿主 session/event → collector/live.cjs）
+                                                 │  两条路径共用同一判定与入库
+                                                 ▼
+                        scanner.classifyRecord ──► engine.ingestFresh
+                                                 ├─ 指纹去重（seenFingerprints，带上限截尾）
+                                                 ├─ 聚簇索引（clusters：hash → cid/n）
+                                                 └─ 复活/新建/累加 → inbox.md 行 + details/C###.md + state.json v2
+```
+
+## 4. 详细设计
+
+### 4.1 增量水位线（state.json v2 `files`）
+
+每个会话日志记录 `{ size, mtimeMs, offset, frames, sid, ws, calls }`：
+
+1. `size` 与 `mtimeMs` 都没变 → **只 stat，不解码**（G1 的「未更新就跳过」）；
+2. 变大 → 用 `fs.readSync(fd, buf, pos=offset)` 只读 `[offset, EOF)`，只解其中的新帧；
+3. `offset > size`（截断/轮转）或 offset 处不是 zstd magic → 该文件**退回全量重扫**并重置水位线；
+4. **末尾半写帧/坏帧解压失败 → offset 不推进** → 下次自动重试（天然的失败重试）；
+5. `mtimeMs = -1` 用于标记「尾部有未消费帧」，保证下次必扫。
+
+**关键坑（已修）**：增量窗口常只剩 `tool/result` 而没有配对的 `tool/call`，工具名会退化成 `?`；而 `tool` 是聚簇键的一部分 → 同一个坑会被当成新坑重复入箱。解决：水位线里持久化 `callId→工具名` 映射（每文件上限 512，超出丢最旧），增量时继承。自检里专门用「只追加 result 帧」的用例覆盖。
+
+### 4.2 聚簇索引与复发策略（`clusters`）
+
+`clusters[hash] = { cid, cat, text, n, first, last, reAddedAt, reAdds }`，`hash = hash36(clusterKey(ev))`（与指纹同源，不改算法 → 历史指纹不变式不受影响）。
+
+每批新事件判定四种结局：
+
+| 结局 | 条件 | 动作 |
+|---|---|---|
+| 累加（bump） | 聚簇存在且候选**仍在 inbox** | 就地改写该行「次数」列；sidecar 追加「## 复发记录」 |
+| 复发（readd） | 聚簇存在但候选已不在 inbox（已入库/已删除） | 新开候选，现象列前缀 `复发（原 C0xx）：`，sidecar 标注原候选 |
+| 静默（silent） | 复发且距上次重开 < `reAddCooldownDays`（默认 7 天） | 只累计次数 + sidecar 记录，不重开候选、不打扰 |
+| 新建（new） | 无聚簇 | 按 v0.4 行为新建候选 |
+
+升级自愈：v0.4 时代的候选没有簇索引，同 `类别 + 现象列` 时**认领**为同一聚簇，避免升级后第一次复发变成重复行。
+
+### 4.3 实时采集（`collector/live.cjs`）
+
+宿主 `lib/index.js` 在 `apply(ctx)` 中订阅 `ctx.on('session/event', ...)`：
+
+- `tool/call` → 记 `callId→工具名`；`tool/result` → 失败优先判定；成功结果仅对命令类工具做特征扫描；`user/message` → 真实用户报障判定（沿用 v2.1 政策）。
+- **与批扫共用 `scanner.classifyRecord`**（同形事件对象）→ 判定表永不漂移。
+- 去抖 1.5 s 合并一波重试；写盘走 promise 链**串行化**；每轮 flush **现读现写** `state.json`，不缓存水位线，避免覆盖 CLI 批扫刚建立的水位线。
+- 单轮最多开 6 行（噪声上限），超出只记指纹；`autoCollect/liveCapture=false` 时整体停用；**监听器内吞掉一切异常**，采集失败绝不影响用户会话。
+- 自检 `GET /whale/live` 暴露 `{version, live:{events,flushes,added,bumped,...}, watermarks, clusters, fingerprints}`。
+
+### 4.4 面板 ⟳ 与 CLI
+
+- `POST /whale/scan`：先把实时缓冲落盘 → 再按水位线增量扫描 → 返回 `{added, bumped, pending, ms}`；并发调用返回 409。
+- 面板 ⟳：由「只重拉列表」改为「触发扫描 → 刷新列表」，按钮 tooltip 显示本次结果。
+
+| 命令 | 语义 |
+|---|---|
+| `mine.cjs --check` | 增量扫描入箱（默认） |
+| `mine.cjs --check --full` | 忽略水位线全量重扫（排障/校验） |
+| `mine.cjs --check --dry` | 只报结果不落盘（含不写 state） |
+| `mine.cjs --stats` | 全量统计**纯只读**（v0.5 起不再写 state） |
+| `mine.cjs --prewarm` | 只记指纹与水位线不入箱；输出警告说明会「消费」候选 |
+
+### 4.5 顺带修复的缺陷
+
+1. **`--stats` / `--prewarm` 静默吞候选**：旧版会把 `seenFingerprints` 落盘，等于跑一次统计就让这批新 error 永不进箱 → `--stats` 改为纯只读。
+2. **`seenFingerprints` 无限增长** → 按 `maxFingerprints`（默认 5000）截尾。
+3. **现象列含 `|` 时整行无法解析**（表格列分隔符冲突 → 面板看不见、也无法累加次数）→ 行列写入时 `|` 转全角 `｜`；待审行解析收敛到 `repo.parseInboxRows`（store 层唯一入口）。
+4. **会话开始提醒的 token 成本**：待审 > `reminderListMax`（默认 3）时只报「新增 N / 待审共 M」并提示面板，不再逐条列清单。
+
+### 4.6 v0.5.1 自引用/探针回声过滤（原 §8.1 遗留项，已修）
+
+**问题**：`SELF_REF` / `ENC_DIAG_RE` 只作用于「成功的命令结果」，`error` 类事件直接绕过 → 维修采集器自身、研究会话日志格式时产生的失败与探针输出全部进箱。真实历史预演：26 条新候选中约 20 条属此类。
+
+**方案**：`scanner.isMetaEcho(text)` 两级签名，**命中者标记 `meta=true` 交由 engine 落档后再排除**（不静默丢弃）：
+
+| 级别 | 语义 | 例 |
+|---|---|---|
+| STRONG（单条命中即判） | 采集器/本机制自身产物的唯一性标记 | `whale-notebook`、`mine.cjs`、`inbox.md`、`details/C###`、`[dry 只读]`、`新发现 N 条`、`byCat`、`ENC_DIAG`、`SELF_REF`、`*.selftest.cjs`、`sync-release`、`frame layout`、`endNL=`、`variant A` |
+| WEAK（需 ≥2 条同时命中） | 弱特征，单独出现很可能是真实故障文本 | `cordis`、`plugin-group`、`dsh-host-webserver`、`ctx.router`、`session.jsonl.zstd`、`frames=N`、`gbk decode`、`permission/preset`、`@deepseek-ai`、`AppData\Roaming\npm` |
+
+**可审计**：被过滤条目按聚簇落档到 `~/.dsh/whale-notebook/archive/echo-<YYYYMMDD>.md`（`| 时间 | 类别 | 次数 | 工作区 | 现象 |`），扫描输出报「自引用回声过滤 N 组/M 条」，`GET /whale/live` 与实时统计同样计数。
+
+**效果**（同一份真实历史）：新候选 **26 → 2**（保留的两条是真的 `[sandbox: file access denied under workspace-write mode]` 沙箱拒绝坑）。自检新增 4 断言：回声不进箱、计数与提示、落档可查、弱特征单命中不误伤。
+
+
+
+| # | 任务 | 产物 | 状态 |
+|---|---|---|---|
+| 1 | 解码层增量入口 | `collector/decoder.cjs` (`decodeLinesFrom`/`readTail`) | ✅ |
+| 2 | 判定层抽出共用函数 | `collector/scanner.cjs` (`classifyRecord`/`classifyToolResult`/`classifyUserMessage`/`boundCalls`) | ✅ |
+| 3 | 存储层 state v2 + 行操作 | `store/repo.cjs` (`normalizeState`/`parseInboxRows`/`pendingIds`/`bumpInboxRows`/`writeInboxText`/`appendDetailNote`) | ✅ |
+| 4 | 引擎：水位线 + 聚簇/复发 + dry | `collector/engine.cjs` (`scanHistory`/`ingestFresh`/`markSeen`) | ✅ |
+| 5 | 实时采集器 | `collector/live.cjs`（新增） | ✅ |
+| 6 | CLI 旗标 | `collector/cli.cjs`（`--full`/`--dry`） | ✅ |
+| 7 | 宿主挂载 + 新端点 | `lib/index.js`（`session/event`、`POST /whale/scan`、`GET /whale/live`） | ✅ |
+| 8 | 面板 ⟳ 语义 | `lib/client.js`（`apiScan`） | ✅ |
+| 9 | 设置与提醒句 | `settings.json`、`core/schema.cjs`（`SETTINGS_DEFAULTS`）、`inject/agents.cjs` | ✅ |
+| 10 | 自检 | `collector/e2e.selftest.cjs`（35 断言）、`collector/live.selftest.cjs`（新增 17 断言）、`scripts/bundle-smoke.cjs`（v0.5 结构断言） | ✅ |
+| 11 | 部署与镜像 | `scripts/deploy-web.cjs --apply` → `profiles/web/node_modules/...`；`tools/sync-release.cjs` → 发布镜像库 | ✅ |
+
+## 6. 验证与实测结果
+
+### 6.1 真实历史实测（23.88 MB / 13 文件，临时数据目录，不触碰真实 inbox）
+
+| 场景 | 结果 |
+|---|---|
+| 冷启动（无水位线 = 全量） | 13/13 文件、读取 23.81 MB、**2233 ms** |
+| 热启动（水位线命中） | 解码 **0** 文件、跳过 13、读取 **0.00 MB**、**11 ms**（提速约 350×） |
+| `--check --full` 校验 | 2048 ms、**新发现 0 条** ⟹ 增量没有漏采 |
+| `--check --dry` | 0 写入 |
+| `state.json` | 84.6 KB（水位线 + callId 映射 + 聚簇索引，含 13 会话） |
+
+### 6.2 自检矩阵
+
+| 套件 | 断言 | 结果 |
+|---|---|---|
+| `src/collector/e2e.selftest.cjs` | 40（含增量等价性、跨窗口工具名继承、`--dry` 不写、`--stats` 只读、复发/冷却、`--full` 无重复、水位线结构、回声过滤 4 条） | 全绿 |
+| `src/collector/live.selftest.cjs` | 19（判定、实时入箱、反复重试累加、不覆盖水位线、dispose 冲刷、开关、畸形事件不抛） | 全绿 |
+| `src/ui/server.selftest.cjs` / `core/privacy` / `core/summarize` / `collector/engine` | 45 / 10 / 10 / 10 | 全绿 |
+| `scripts/bundle-smoke.cjs` | bundle 桩 + v0.4/v0.5 结构断言 | 全绿 |
+
+合计 **134 断言**（6 套件）+ bundle 桩，全绿。
+
+### 6.3 生效方式（**重要**）
+
+| 改动 | 生效条件 |
+|---|---|
+| `lib/client.js`（浏览器半边） | 只需**刷新页面**（loader 每请求现读磁盘且 `no-cache`） |
+| `lib/index.js` / `src/**`（宿主半边：实时采集、`/whale/scan`） | **需重启 dsh web**（cordis 装载器启动时读入）；重启会中断在线会话，须由用户选择时机 |
+| `mine.cjs` 增量批扫 | 立即可用，无需重启 |
+
+## 7. 回滚方案
+
+1. 面板/宿主：`node plugin/scripts/deploy-web.cjs --undo --apply`（摘除 patch 行并按清单回退）。
+2. 仅想回到「全量扫描」：`settings.json` 置 `"scanMode": "full"`（或命令行 `--full`），无需改代码。
+3. 实时采集出问题：`"liveCapture": false`（宿主侧停止入箱，批扫照常）。
+4. 数据侧：`state.json` 是纯派生状态，删除后下次扫描会重建水位线与指纹（代价：候选可能被重新发现，不丢数据）。
+
+## 8. 遗留与风险
+
+1. **自引用回声** —— ✅ 已解决：见 §4.6（v0.5.1 两级签名过滤 + 落档可审计；真实预演 26 → 2 条）。
+2. **跨进程写竞态**：`dsh web`（实时）与 CLI 批扫可能同时写 `state.json`；已用「原子替换 + 每轮现读现写」把窗口压到最小，但极端情况下仍可能丢一次水位线更新（下一次扫描会自动补扫，不丢数据）。
+3. `--check` 单轮最多开 30 行（`maxNewRows`），超出的只记指纹不再进箱（与 v0.4 行为一致，现在会显式报出「超单轮上限丢弃 N 条」）。
+4. 首次升级后第一轮扫描仍是全量（建立水位线），此后才享受增量。
+
+## 9. 后续可选增强
+
+- `error` 类事件的自引用/诊断过滤（对应 §8.1）。
+- 采集器给自身会话打标（如 `whale-notebook:meta` 标记），从源头排除元讨论回声。
+- 定时增量扫描（`dsh-schedule` 可用）替代会话开始触发。
+- 已解决墙与聚簇索引打通：入库条目直接记录 cluster hash，复发时在墙上标注「复发」。

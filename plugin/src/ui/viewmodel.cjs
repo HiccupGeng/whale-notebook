@@ -5,12 +5,9 @@ const repo = require('../store/repo.cjs');
 const { CATEGORY_TITLES } = require('../core/schema.cjs');
 
 // 待审小列表（每条一行；供会话提醒 / GUI 面板 / 桌宠通知共用）
+// v0.5：行解析收敛到 store 层 repo.parseInboxRows（与 engine 的次数累加共用同一正则）
 function inboxViewModel() {
-  const text = repo.readInboxText();
-  const rows = text.split('\n')
-    .map((l) => l.match(/^\| (C\d+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/))
-    .filter(Boolean)
-    .map((m) => ({ id: m[1].trim(), cat: m[2].trim(), n: m[3].trim(), ws: m[4].trim(), text: m[5].trim(), time: m[6].trim() }));
+  const rows = repo.parseInboxRows();
   return { rows, pending: rows.length, headline: `待审核 ${rows.length} 条`, rowsByCat: countBy(rows, (r) => r.cat) };
 }
 

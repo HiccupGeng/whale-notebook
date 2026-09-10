@@ -37,8 +37,23 @@ function writeJson(file, obj) {
 function readSettings() { return readJson(P.settings, {}); }
 
 // ---- state ----
-function emptyState() { return { lastScan: 0, seenFingerprints: [], nextCandidateId: 1 }; }
-function readState() { return readJson(P.state, emptyState()); }
+// v0.5 结构（旧 state.json 自动补齐，零迁移）：
+//   files    : { "<会话日志绝对路径>": { size, mtimeMs, offset, frames, sid, ws } } ← 增量水位线
+//   clusters : { "<聚簇哈希>": { cid, cat, text, n, first, last, reAddedAt, reAdds } } ← 跨轮次同坑合并
+//   seenFingerprints：事件级指纹（防重读同一字节；按 maxFingerprints 截尾，不再无限增长）
+const STATE_VERSION = 2;
+function emptyState() { return { v: STATE_VERSION, lastScan: 0, seenFingerprints: [], nextCandidateId: 1, files: {}, clusters: {} }; }
+function normalizeState(s) {
+  const out = (s && typeof s === 'object') ? s : {};
+  if (!Array.isArray(out.seenFingerprints)) out.seenFingerprints = [];
+  if (!Number.isFinite(out.nextCandidateId) || out.nextCandidateId < 1) out.nextCandidateId = 1;
+  if (!out.files || typeof out.files !== 'object') out.files = {};
+  if (!out.clusters || typeof out.clusters !== 'object') out.clusters = {};
+  if (!Number.isFinite(out.lastScan)) out.lastScan = 0;
+  out.v = STATE_VERSION;
+  return out;
+}
+function readState() { return normalizeState(readJson(P.state, emptyState())); }
 function writeState(state) { writeJson(P.state, state); }
 
 // ---- inbox ----
@@ -52,6 +67,37 @@ function appendInboxRows(rowsText) {
 }
 function initInboxIfMissing(headerText) {
   if (!fs.existsSync(P.inbox)) fs.writeFileSync(P.inbox, headerText + '\n', 'utf8');
+}
+// v0.5：待审行解析（行格式的唯一解析入口，viewmodel/engine 共用，避免两处正则漂移）
+const INBOX_ROW_RE = /^\| (C\d+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/;
+function parseInboxRows(text) {
+  const src = text === undefined ? readInboxText() : String(text);
+  return src.split('\n')
+    .map((l) => l.match(INBOX_ROW_RE))
+    .filter(Boolean)
+    .map((m) => ({ id: m[1].trim(), cat: m[2].trim(), n: m[3].trim(), ws: m[4].trim(), text: m[5].trim(), time: m[6].trim() }));
+}
+function pendingIds(text) { return new Set(parseInboxRows(text).map((r) => r.id)); }
+// 就地更新指定候选的「次数」列（只碰第 3 列，行内其余字节保持原样）
+function bumpInboxRows(text, counts) {
+  const get = (id) => (counts instanceof Map ? counts.get(id) : counts[id]);
+  const lines = String(text).split('\n');
+  let changed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\| (C\d+) \|/);
+    if (!m) continue;
+    const n = get(m[1]);
+    if (n === undefined || n === null) continue;
+    const next = lines[i].replace(/^(\| C\d+ \| [^|]*\| )\d+( \|)/, `$1${n}$2`);
+    if (next !== lines[i]) { lines[i] = next; changed++; }
+  }
+  return { text: lines.join('\n'), changed };
+}
+// 整文件原子替换（tmp + rename；批量追加/改次数走这一条，避免半写与多次写）
+function writeInboxText(text) {
+  const tmp = P.inbox + '.tmp';
+  fs.writeFileSync(tmp, text, 'utf8');
+  fs.renameSync(tmp, P.inbox);
 }
 // 从 inbox 移除指定 C 编号行；联动：被移除候选的 detail sidecar 移入 archive/details/（无源 no-op）。
 // 面板删除 / 忘掉 / 入库移行全部收敛到本入口，保证 detail 与候选行同生命周期（归档不销毁）。
@@ -77,6 +123,16 @@ function archiveInboxRows(rowsText) {
   fs.appendFileSync(file, (fs.existsSync(file) ? '' : '# 归档\n\n| 编号 | 类别 | 次数 | 工作区 | 现象（已打码） | 时间 | 处置 |\n|---|---|---|---|---|---|---|\n') + rowsText + '\n', 'utf8');
 }
 
+// v0.5.1：自引用/探针回声落档（被过滤的候选不静默丢失，可事后审计）
+function appendEchoArchive(rowsText) {
+  if (!rowsText) return false;
+  if (!fs.existsSync(P.archive)) fs.mkdirSync(P.archive, { recursive: true });
+  const name = `echo-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.md`;
+  const file = path.join(P.archive, name);
+  fs.appendFileSync(file, (fs.existsSync(file) ? '' : '# 自引用/探针回声（已过滤，未进待审箱）\n\n| 时间 | 类别 | 次数 | 工作区 | 现象（已打码） |\n|---|---|---|---|---|\n') + rowsText + '\n', 'utf8');
+  return true;
+}
+
 // ---- candidate details（v0.3 sidecar：details/C###.md，随候选行同生命周期）----
 // 内容协议见 collector/engine.cjs buildDetailMd：一句话 + 类别/次数 + 源引用 + 打码摘录。
 function detailFilePath(id) { return path.join(P.details, id + '.md'); }
@@ -93,6 +149,14 @@ function readDetail(id) {
   if (!/^C\d{3}$/.test(id)) return null;
   const file = detailFilePath(id);
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+}
+// v0.5：候选复发时在 sidecar 末尾追加一段记录（sidecar 不存在则 no-op，绝不新建）
+function appendDetailNote(id, note) {
+  if (!/^C\d{3}$/.test(id) || typeof note !== 'string' || !note.trim()) return false;
+  const file = detailFilePath(id);
+  if (!fs.existsSync(file)) return false;
+  fs.appendFileSync(file, '\n' + note.replace(/\s+$/, '') + '\n', 'utf8');
+  return true;
 }
 // 候选行移出 inbox（删除/入库/忘掉）时调用：detail → archive/details/（保留可查，不销毁）
 function archiveDetail(id) {
@@ -238,10 +302,11 @@ function buildIndexMd(entries) {
 }
 
 module.exports = {
-  HOME, NB_DIR, P,
+  HOME, NB_DIR, P, STATE_VERSION,
   readJson, writeJson,
-  readSettings, readState, emptyState, writeState,
-  readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows,
-  detailFilePath, writeDetail, readDetail, archiveDetail,
+  readSettings, readState, emptyState, normalizeState, writeState,
+  readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows, appendEchoArchive,
+  parseInboxRows, pendingIds, bumpInboxRows, writeInboxText,
+  detailFilePath, writeDetail, readDetail, appendDetailNote, archiveDetail,
   listEntries, nextEntryId, readEntryText, buildIndexMd,
 };

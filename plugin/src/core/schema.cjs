@@ -33,6 +33,12 @@ const SETTINGS_DEFAULTS = {
   minOccurrences: 1,
   maxRulesInAgents: 12,
   checkEnabled: true,
+  // v0.5：增量采集与实时入库
+  scanMode: 'incremental', // incremental（默认，按水位线只扫新增）| full（每轮全量重扫）
+  liveCapture: true,       // 宿主 session/event 实时入箱（需重启 dsh web 生效）
+  reAddCooldownDays: 7,    // 已处置的坑复发时，冷却期内只静默计数、不重开候选
+  reminderListMax: 3,      // 会话开始提醒：待审 ≤ 该值才逐条列编号清单，否则只报数字（省 token）
+  maxFingerprints: 5000,   // seenFingerprints 上限，超出按插入序截尾（防无限增长）
 };
 
 const AGENTS_MARK = {
@@ -41,9 +47,11 @@ const AGENTS_MARK = {
 };
 
 // 待审行协议: `| C### | 类别 | 次数 | 工作区 | 现象(打码) | 时间 |`
+// v0.5：现象/工作区列里的 `|` 换成全角 `｜` —— 否则该行无法被表格解析（面板看不见、也无法累加次数）
+function cell(s) { return String(s == null ? '' : s).replace(/\|/g, '｜'); }
 function inboxRow(candidateId, row) {
   const id = 'C' + String(candidateId).padStart(3, '0');
-  return `| ${id} | ${row.cat} | ${row.n} | ${[...row.wsSet].slice(0, 2).join(',')} | ${String(row.text).slice(0, 120)} | ${row.time || ''} |`;
+  return `| ${id} | ${cell(row.cat)} | ${cell(row.n)} | ${cell([...row.wsSet].slice(0, 2).join(','))} | ${cell(String(row.text).slice(0, 120))} | ${cell(row.time || '')} |`;
 }
 const INBOX_HEADER = '| 编号 | 类别 | 次数 | 工作区 | 现象（一行，已打码） | 时间 |\n|---|---|---|---|---|---|';
 

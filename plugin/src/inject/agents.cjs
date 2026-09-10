@@ -10,9 +10,10 @@ const SECTION_HEADING = '## 自动段：whale-notebook 经验规则（由小本�
 // 固定尾注（紧跟规则行之后，end 标记之前）
 function tailLines(settings) {
   const checkEnabled = settings.autoCollect !== false && settings.checkEnabled !== false;
+  const listMax = Number.isFinite(settings.reminderListMax) ? settings.reminderListMax : 3;
   const lines = [];
   if (checkEnabled) {
-    lines.push('- **自动采集提醒**：每个新会话开始后，若 `~/.dsh/whale-notebook/scripts/mine.cjs --check` 输出有新发现，向用户展示待审核箱 `inbox.md` 的小型编号列表（每条一行：编号|类别|次数|工作区|现象简述）并询问是否审核；用户表示「先不管」则本会话不再提醒。无待审时静默执行，不打断用户任务。');
+    lines.push(`- **自动采集提醒**：每个新会话开始后运行 \`~/.dsh/whale-notebook/scripts/mine.cjs --check\`（v0.5 起为增量扫描：未更新的会话日志只 stat 跳过、通常 <100ms；会话运行中出现的失败已由插件实时入箱，不必等扫描）。若有新发现：待审总数 ≤ ${listMax} 条时展示编号清单（每条一行：编号|类别|次数|工作区|现象简述）并询问是否审核；超过 ${listMax} 条时只报「新增 N 条 / 待审共 M 条」并提示面板 ⟳ 可看（省 token），不再逐条列清单。用户表示「先不管」则本会话不再提醒。无待审时静默执行，不打断用户任务。`);
   } else {
     lines.push('- 自动采集已由 settings.json 关闭（autoCollect/checkEnabled=false）。');
   }

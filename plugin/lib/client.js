@@ -11,6 +11,13 @@
 //            面板轮询会话消息快照（ConversationSnapshot.nodes / .partial）识别并弹红色警示条。
 // v0.4 语义：已解决墙 = 轻口径（入库即已处理）；全局区/项目区分组，行点击拉条目全文展开；
 //            无待审且无条目时整面板隐藏（不打扰）；project 级条目仅展示、不进任何注入面。
+// v0.4.1（UI，2026-09）：⚡ 自动处理入口暂时隐藏（候选行只剩 💬 讨论 / ✕ 删除；代码与判定表保留，
+//            apply() 内 AUTO_VISIBLE = true 即可一键恢复）；待审箱页头「✅」= 直达已解决墙（A2 页），
+//            已解决页头「🐳」= 返回待审箱（双向直达，无需先收起再点侧边入口）。
+// v0.5（2026-09）：⟳ 从「只重拉列表」升级为「先触发增量扫描再刷新」（POST /whale/scan，零 token：
+//            宿主按水位线只解新增帧；会话运行中的失败另由宿主 session/event 实时入箱）。
+//   POST /whale/scan             -> {ok, added, bumped, pending, ms}  面板 ⟳ 触发的增量扫描
+//   GET  /whale/live             -> {ok, version, live, watermarks...} 运行状态（自检/排障）
 window.__ModuleLoader__.load({
 	id: "@deepseek-ai/dsh-whale-notebook",
 	factory: (require) => {
@@ -105,6 +112,22 @@ window.__ModuleLoader__.load({
 			return fetch("/whale/inbox", { headers: { accept: "application/json" } }).then(function (r) {
 				if (!r.ok) throw new Error("HTTP " + r.status);
 				return r.json();
+			});
+		}
+		// v0.5：触发宿主增量扫描（POST /whale/scan）；失败返回 null（调用方回退为只刷新）
+		function apiScan() {
+			return fetch("/whale/scan", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: "{}"
+			}).then(function (r) {
+				return r.json().catch(function () { return null; }).then(function (j) {
+					if (!r.ok || !j || j.ok !== true) throw new Error(j && j.error ? j.error : "HTTP " + r.status);
+					return j;
+				});
+			}).catch(function (err) {
+				console.warn("[whale-panel] 增量扫描失败（仅刷新列表）:", err && err.message ? err.message : err);
+				return null;
 			});
 		}
 		// v0.3：候选详情 sidecar；失败/旧候选一律返回 null（调用方回退无详情模板）
@@ -287,6 +310,7 @@ window.__ModuleLoader__.load({
 			var riskWatcher = null; // watchRisk 的 interval
 			var alertEl = null;
 			var alertTimer = null;
+			var AUTO_VISIBLE = false; // v0.4.1：⚡ 自动处理入口暂时隐藏（投递当前会话+警示条效果用户不认可）；置 true 恢复
 
 			var box = el("div", "wh-box");
 			// 入口 tab A：待审（有待审核候选才显示；红徽 = 待审数）
@@ -314,11 +338,15 @@ window.__ModuleLoader__.load({
 			var card = el("div", "wh-card wh-card-inbox");
 			var head = el("div", "wh-head");
 			var headTitle = el("div", "wh-head-title", "🐳 待审箱");
+			// v0.4.1：页头快捷钮「进入 A2 已解决页」——贴刷新 ⟳ 左边，免去收起再点侧边 ✅ 入口
+			var btnSolved = el("button", "wh-icn", "✅");
+			btnSolved.title = "已解决墙（A2）：查看已入库条目";
 			var btnRefresh = el("button", "wh-icn", "⟳");
 			btnRefresh.title = "刷新";
 			var btnClose = el("button", "wh-icn", "✕");
 			btnClose.title = "收起 (Esc)";
 			head.appendChild(headTitle);
+			head.appendChild(btnSolved);
 			head.appendChild(btnRefresh);
 			head.appendChild(btnClose);
 			card.appendChild(head);
@@ -331,11 +359,15 @@ window.__ModuleLoader__.load({
 			var cardB = el("div", "wh-card wh-card-solved");
 			var headB = el("div", "wh-head");
 			var headTitleB = el("div", "wh-head-title", "✅ 已解决");
+			// v0.4.1：对称返回钮「回待审箱」——贴刷新 ⟳ 左边
+			var btnBack = el("button", "wh-icn", "🐳");
+			btnBack.title = "待审箱：返回待审核候选列表";
 			var btnRefreshB = el("button", "wh-icn", "⟳");
 			btnRefreshB.title = "刷新";
 			var btnCloseB = el("button", "wh-icn", "✕");
 			btnCloseB.title = "收起 (Esc)";
 			headB.appendChild(headTitleB);
+			headB.appendChild(btnBack);
 			headB.appendChild(btnRefreshB);
 			headB.appendChild(btnCloseB);
 			cardB.appendChild(headB);
@@ -382,13 +414,17 @@ window.__ModuleLoader__.load({
 						meta.appendChild(el("span", "wh-cat", r.cat));
 						meta.appendChild(el("span", "wh-n", "×" + r.n));
 						var acts = el("span", "wh-acts");
-						var b1 = el("button", "wh-abtn", "⚡");
-						b1.title = "自动处理：只读诊断；补全型小修可直接执行，重大隐患自动上报";
+						// v0.4.1：⚡ 自动处理入口暂时隐藏（AUTO_VISIBLE=false）；doAuto/watchRisk/RISK 警示保留待恢复
+						if (AUTO_VISIBLE) {
+							var b1 = el("button", "wh-abtn", "⚡");
+							b1.title = "自动处理：只读诊断；补全型小修可直接执行，重大隐患自动上报";
+							b1.addEventListener("click", function (ev) { ev.stopPropagation(); doAuto(r); });
+							acts.appendChild(b1);
+						}
 						var b2 = el("button", "wh-abtn", "💬");
 						b2.title = "详细讨论：开新会话并携带该候选上下文与后台详情";
 						var b3 = el("button", "wh-abtn wh-abtn-danger", "✕");
 						b3.title = "删除：视为已解决/无需解决，移入归档（可恢复）";
-						acts.appendChild(b1);
 						acts.appendChild(b2);
 						acts.appendChild(b3);
 						meta.appendChild(acts);
@@ -396,8 +432,7 @@ window.__ModuleLoader__.load({
 						var text = el("div", "wh-text", r.text);
 						text.title = "工作区 " + r.ws + "｜首次 " + r.time;
 						row.appendChild(text);
-						row.title = "自动处理⚡ / 讨论💬 / 删除✕";
-						b1.addEventListener("click", function (ev) { ev.stopPropagation(); doAuto(r); });
+						row.title = "讨论💬 / 删除✕";
 						b2.addEventListener("click", function (ev) { ev.stopPropagation(); doDiscuss(r); });
 						b3.addEventListener("click", function (ev) { ev.stopPropagation(); doDelete(r); });
 						list.appendChild(row);
@@ -679,9 +714,23 @@ window.__ModuleLoader__.load({
 			// ---- 事件与生命周期 ----
 			tabA.addEventListener("click", function () { setMode(open === "inbox" ? null : "inbox"); });
 			tabB.addEventListener("click", function () { setMode(open === "solved" ? null : "solved"); });
+			// v0.4.1：页头双向直达（✅ 进 A2 已解决页 / 🐳 回待审箱）——两钮只出现在各自卡片可见时
+			btnSolved.addEventListener("click", function () { setMode("solved"); });
+			btnBack.addEventListener("click", function () { setMode("inbox"); });
 			btnClose.addEventListener("click", function () { setMode(null); });
 			btnCloseB.addEventListener("click", function () { setMode(null); });
-			btnRefresh.addEventListener("click", function () { renderRows(); refresh(false); });
+			// v0.5：⟳ = 先触发宿主增量扫描（零 token：按水位线只解新增帧），再刷新列表
+			btnRefresh.addEventListener("click", function () {
+				renderRows();
+				apiScan().then(function (j) {
+					if (j) {
+						btnRefresh.title = j.added
+							? "刷新（本次增量扫描：新发现 " + j.added + " 条｜待审共 " + j.pending + " 条）"
+							: "刷新（本次增量扫描：无新发现｜" + j.ms + "ms）";
+					}
+					return refresh(false);
+				});
+			});
 			btnRefreshB.addEventListener("click", function () { renderSolved(); refreshSolved(false); });
 			function onDocDown(ev) {
 				if (open && !box.contains(ev.target)) setMode(null);

@@ -32,4 +32,10 @@ const REQUIRED = ['/whale/solved', '/whale/entry?id=', 'wh-card-solved', 'wh-bad
 for (const s of REQUIRED) {
   if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.4 结构: ' + s);
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4 结构完整');
+// v0.5 内容断言：⚡ 入口受开关控制（默认隐藏）、双卡互跳按钮、⟳ 触发增量扫描
+const REQUIRED_V5 = ['/whale/scan', 'apiScan', 'AUTO_VISIBLE', 'btnSolved', 'btnBack'];
+for (const s of REQUIRED_V5) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.5 结构: ' + s);
+}
+if (!/var AUTO_VISIBLE = false/.test(code)) throw new Error('v0.5 约定：AUTO_VISIBLE 默认应为 false（⚡ 入口隐藏）');
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4 结构完整, v0.5 结构完整（⚡隐藏/双卡互跳/⟳增量扫描）');
