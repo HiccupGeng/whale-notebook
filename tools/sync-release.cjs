@@ -128,7 +128,10 @@ function main() {
 
   const add = git(['add', '-A']);
   if (add.status !== 0) { out('err', `git add 失败: ${add.stderr || add.stdout}`); process.exit(1); }
-  const names = git(['diff', '--cached', '--name-only']).stdout.split('\n').filter(Boolean);
+  // 取变更清单必须关掉 quotepath 并用 -z 分隔: 否则非 ASCII 文件名被转义成 \346\226\207…,
+  // 且 Windows 的 path.basename 会把转义里的反斜杠当路径分隔符, 摘要里出现 "222.md\"" 这类乱码。
+  const names = git(['-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '-z'])
+    .stdout.split('\0').filter(Boolean);
   if (!names.length) {
     out('ok', '无文件变化, 跳过提交与推送');
     return;
