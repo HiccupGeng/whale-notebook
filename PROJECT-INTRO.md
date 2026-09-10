@@ -52,6 +52,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `PROJECT-INTRO.md` | 本文发布镜像（与权威一致，sync 自动带） |
 | `README.md` | 库门面：**是什么 / 快速开始 / 用法 / 隐私 / 验证 / 版本沿革表**（手工维护，不参与镜像同步） |
 | `CHANGELOG.md` | **版本沿革明细**：每个版本解决了什么问题、怎么解决、实测数据（手工维护） |
+| `LICENSE` | MIT（手工维护；与 `plugin/package.json` 的 `license` 字段一致） |
 | `plugin/` | 插件包源码镜像（`~/.dsh/whale-notebook/plugin`） |
 | `docs/` | 设计/调研记录（九份，sync 自动带：v1 实施记录 → v2.0 架构/生命周期 → 生态调研 → 面板设计 → v0.3 → 需求梳理 → v0.4 → v0.5 实施计划，后者 §4.7/§4.8 同时承载 v0.6 与 v0.7） |
 | `tools/sync-release.cjs` | 一键同步提交：权威 → 库 → commit → push |

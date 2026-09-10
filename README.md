@@ -69,7 +69,7 @@ node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --appl
 | `CHANGELOG.md` | **版本沿革明细**：每个版本解决了什么问题、怎么解决、实测数据 |
 | `tools/sync-release.cjs` | 一键发布：权威源 → 本仓库镜像 → commit → push（幂等） |
 
-> `README.md` 与 `CHANGELOG.md` 为**手工维护**（不参与镜像同步）；其余目录与 `PROJECT-INTRO.md` 是本机运行源码的逐字节镜像。
+> `README.md`、`CHANGELOG.md` 与 `LICENSE` 为**手工维护**（不参与镜像同步）；其余目录与 `PROJECT-INTRO.md` 是本机运行源码的逐字节镜像。
 > 运行实例与用户数据在 `~/.dsh/whale-notebook/`，**永不入库**。
 
 ## 隐私边界（务必遵守）
@@ -113,4 +113,4 @@ node scripts/redact.test.cjs                          # 13 PASS · 打码回归
 
 ## 许可
 
-`plugin/package.json` 声明 MIT；**仓库当前没有 `LICENSE` 文件**——正式对外使用前建议补一份。
+[MIT](LICENSE) © 2026 HiccupGeng ｜ `plugin/package.json` 的 `license` 字段与之一致。
