@@ -2,7 +2,7 @@
 // 未来：inbox 面板 / 独立小对话框 / 桌宠气泡全部消费这些形状，不直接碰文件。
 'use strict';
 const repo = require('../store/repo.cjs');
-const { CATEGORY_TITLES } = require('../core/schema.cjs');
+const { categoryTitle, sortCategoryKeys } = require('../core/schema.cjs');
 
 // 待审小列表（每条一行；供会话提醒 / GUI 面板 / 桌宠通知共用）
 // v0.5：行解析收敛到 store 层 repo.parseInboxRows（与 engine 的次数累加共用同一正则）
@@ -41,10 +41,9 @@ function solvedViewModel() {
 
   const gByCat = {};
   for (const e of globals) (gByCat[e.category] = gByCat[e.category] || []).push(e);
-  const catOrder = Object.keys(CATEGORY_TITLES);
-  const global = Object.keys(gByCat)
-    .sort((x, y) => (catOrder.indexOf(x) - catOrder.indexOf(y)) || String(x).localeCompare(y))
-    .map((cat) => ({ cat, title: CATEGORY_TITLES[cat] || cat, entries: gByCat[cat].slice().sort(byNewest).map(entryLight) }));
+  // v0.7.3：改用 schema 的类别展示契约——此前两侧各写一套，未登记类别在面板排最前、在 INDEX.md 排最后
+  const global = sortCategoryKeys(Object.keys(gByCat))
+    .map((cat) => ({ cat, title: categoryTitle(cat), entries: gByCat[cat].slice().sort(byNewest).map(entryLight) }));
 
   const byWs = {};
   for (const e of proj) {

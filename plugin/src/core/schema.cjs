@@ -18,6 +18,9 @@ const CATEGORY_TITLES = {
   'model-api': '模型/API',
   'file-missing': '文件/路径不存在',
   'port-busy': '端口/文件占用',
+  // v0.7.3：error 是采集主力类别（scanner 对任何工具失败结果直接判 error），此前漏登记标题，
+  //   导致文档墙/面板显示裸键。位置刻意放在"具体类别之后、通用兜底 other 之前"。
+  error: '工具报错（未归类的失败结果）',
   other: '其他',
 };
 
@@ -102,8 +105,25 @@ function ruleLine(entry) {
   return `- 【${entry.category}】${entry.rule}`;
 }
 
+// v0.7.3 类别展示契约（唯一入口）——此前 viewmodel 与 repo 各写一套：
+//   未登记类别在 viewmodel 里因 indexOf → -1 而排到最前，在 repo 里被 filter 追加到最末，
+//   同一份数据两侧分组顺序相反。这里把"标题兜底"与"排序秩"收成一处，两个消费者都调用它。
+const CATEGORY_ORDER = Object.keys(CATEGORY_TITLES);
+function categoryTitle(cat) { return CATEGORY_TITLES[cat] || String(cat); }
+function categoryRank(cat) {          // 未登记类别一律排末尾
+  const i = CATEGORY_ORDER.indexOf(cat);
+  return i === -1 ? CATEGORY_ORDER.length : i;
+}
+function sortCategoryKeys(keys) {     // 秩相同再按字典序，保证可复现
+  return keys.slice().sort((x, y) => categoryRank(x) - categoryRank(y) || String(x).localeCompare(String(y)));
+}
+
 module.exports = {
   CATEGORY_TITLES,
+  CATEGORY_ORDER,
+  categoryTitle,
+  categoryRank,
+  sortCategoryKeys,
   SCOPE_TITLES,
   SETTINGS_DEFAULTS,
   AGENTS_MARK,

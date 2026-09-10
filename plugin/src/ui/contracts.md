@@ -25,8 +25,6 @@
 | ② 独立小对话框（与会话并行的鲸鱼窗口） | client-plugin 的自有 surface + host API | 复用 ① 的桥；审核动作仍要求「带编号回写会话」由 agent 执行。**已部分落地**：💬 详细讨论 = 取 `relatedPayload` 后开新会话并带上三块证据（`relatedBlock`）+ 固定收尾动作 |
 | ③ 桌宠（悬浮/托盘/气泡） | ①外部进程桥(ACP/sdk) 或 ②client overlay | 两种形态都只消费 inboxViewModel/事件流；本仓库只提供事件源与 JSON 契约，不绑定具体桌宠实现 |
 | ④ 外观（皮肤/主题/动画） | client-plugin 层 | 与数据层零耦合 |
-| ③ 桌宠（悬浮/托盘/气泡） | ①外部进程桥(ACP/sdk) 或 ②client overlay | 两种形态都只消费 inboxViewModel/事件流；本仓库只提供事件源与 JSON 契约，不绑定具体桌宠实现 |
-| ④ 外观（皮肤/主题/动画） | client-plugin 层 | 与数据层零耦合 |
 
 ## 3. 事件契约（跨平面通知，未来实现）
 

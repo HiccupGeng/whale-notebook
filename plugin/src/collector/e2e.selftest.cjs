@@ -238,6 +238,29 @@ try {
   // ---- --prewarm 明确提示会消费候选 ----
   const pw = runScan('--prewarm');
   check('prewarm 提示会消费候选', pw.ok === true && pw.text.indexOf('不会再作为候选出现') !== -1, pw.text);
+
+  // ---- v0.7.3：CLI 退出码契约（脚本化调用不再靠解析 stdout 判成败；判定层保持纯函数）----
+  const { spawnSync } = require('child_process');
+  const MINE = path.join(__dirname, '..', '..', '..', 'scripts', 'mine.cjs');
+  const spawnMine = (args, home) => spawnSync(process.execPath, [MINE, ...args], {
+    encoding: 'utf8', env: Object.assign({}, process.env, home ? { DSH_HOME: home } : {}),
+  });
+  const textOf = (r) => ((r.stdout || '') + (r.stderr || ''));
+  const rOk = spawnMine(['--check'], tmp);
+  check('v0.7.3 CLI 退出码：正常采集 = 0（"有新发现/有暂存"不算失败）', rOk.status === 0, { status: rOk.status, out: textOf(rOk).slice(0, 160) });
+  const noNb = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-cli-nonb-'));
+  fs.mkdirSync(path.join(noNb, 'sessions'), { recursive: true });   // 有 sessions、无数据目录 → 命中第 2 处 ok:false
+  const noSessions = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-cli-nosess-')); // 连 sessions 也没有 → 命中第 1 处
+  const rNoNb = spawnMine(['--check'], noNb);
+  const rNoSessions = spawnMine(['--check'], noSessions);
+  check('v0.7.3 CLI 退出码：前置缺失 = 2（数据目录缺失 / sessions 根缺失）',
+    rNoNb.status === 2 && rNoSessions.status === 2 &&
+    textOf(rNoNb).indexOf('whale-notebook dir missing') !== -1 && textOf(rNoSessions).indexOf('no sessions root') !== -1,
+    { noNb: { status: rNoNb.status, out: textOf(rNoNb).slice(0, 120) }, noSessions: { status: rNoSessions.status, out: textOf(rNoSessions).slice(0, 120) } });
+  fs.rmSync(noNb, { recursive: true, force: true });
+  fs.rmSync(noSessions, { recursive: true, force: true });
+  const rRender = spawnMine(['--render-rules'], tmp);
+  check('v0.7.3 CLI 退出码：早返回分支（--render-rules）= 0', rRender.status === 0, { status: rRender.status, out: textOf(rRender).slice(0, 120) });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

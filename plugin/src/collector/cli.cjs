@@ -1,4 +1,6 @@
-// collector/cli.cjs - 采集 CLI（供 scripts/mine.cjs 兼容壳与宿主插件复用）
+// collector/cli.cjs - 采集 CLI（只供 scripts/mine.cjs 兼容薄壳复用）
+// v0.7.3 边界：本模块与 engine.runScan 都是纯函数（返回 {ok,text,data}，不设 process.exitCode）——
+//   退出码由进程入口 scripts/mine.cjs 统一给出；宿主半边 POST /whale/scan 走 engine.runScan，不经此处。
 // 用法：node scripts/mine.cjs [--check|--add|--rebuild|--stats|--prewarm] [--full] [--dry]
 //   --check    增量扫描（默认；未更新的会话日志只 stat 跳过）
 //               autoAdd=true 时直接入箱；autoAdd=false（v0.6 拉取式）时只暂存 state.deferred

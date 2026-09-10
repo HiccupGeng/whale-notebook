@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { CATEGORY_TITLES } = require('../core/schema.cjs');
+const { categoryTitle, sortCategoryKeys } = require('../core/schema.cjs');
 
 const HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const NB_DIR = process.env.DSH_WHALE_NB_DIR || path.join(HOME, 'whale-notebook');
@@ -263,13 +263,12 @@ function buildIndexMd(entries) {
   if (!global.length) {
     L.push('（暂无全局条目）');
   } else {
-    const catOrder = Object.keys(CATEGORY_TITLES);
     const gByCat = {};
     for (const e of global) (gByCat[e.category] = gByCat[e.category] || []).push(e);
-    const order = catOrder.filter((c) => gByCat[c]).concat(Object.keys(gByCat).filter((c) => !catOrder.includes(c)));
+    const order = sortCategoryKeys(Object.keys(gByCat)); // v0.7.3：与面板同一套排序契约（未登记类别排末尾）
     for (const cat of order) {
       const list = gByCat[cat].slice().sort(byNewest);
-      L.push(`### ${CATEGORY_TITLES[cat] || cat}（${list.length}）`);
+      L.push(`### ${categoryTitle(cat)}（${list.length}）`);
       L.push('');
       L.push(...tableHeader());
       for (const e of list) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(e.rule)} | ${e.occurrences} | ${e.lastSeen} |`);
@@ -300,7 +299,7 @@ function buildIndexMd(entries) {
     L.push('');
     L.push('| 编号 | 标题 | 类别 | 最近 |');
     L.push('|---|---|---|---|');
-    for (const e of disabled.slice().sort(byNewest)) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(CATEGORY_TITLES[e.category] || e.category)} | ${e.lastSeen} |`);
+    for (const e of disabled.slice().sort(byNewest)) L.push(`| ${e.id} | ${esc(e.title)} | ${esc(categoryTitle(e.category))} | ${e.lastSeen} |`);
     L.push('');
   }
   return L.join('\n') + '\n';

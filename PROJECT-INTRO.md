@@ -25,7 +25,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `~/.dsh/skills/whale-notebook.md` | L2 技能：操作手册（触发词→流程），技能目录热加载 | I 集成段 |
 | `~/.dsh/whale-notebook/` | ★运行数据目录（下详） | D 数据段 |
 | `~/.dsh/whale-notebook/plugin/` | ★插件包源码（模块化，v2 结构；**运行源码权威位**） | D 内（发布镜像于 GitHub 库） |
-| `~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时：插件包部署副本（决策箱面板；副本版本以 `deploy-web --check` 的字节对账为准，权威源已 0.7.2）；由 `plugin/scripts/deploy-web.cjs` 管理，重启 dsh web 生效） | R 运行时段（lifecycle 清单内登记为 installed/absent，`managedBy: scripts/deploy-web.cjs`） |
+| `~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-whale-notebook` | R 段运行时：插件包部署副本（决策箱面板；副本版本以 `deploy-web --check` 的字节对账为准，权威源已 0.7.3）；由 `plugin/scripts/deploy-web.cjs` 管理，重启 dsh web 生效） | R 运行时段（lifecycle 清单内登记为 installed/absent，`managedBy: scripts/deploy-web.cjs`） |
 | `~/.dsh/profiles/web/cordis.patch.yml` | R 段挂载行：web profile 的加载器插入行，只存在标记区内（`# --- whale-notebook 决策箱面板 (deploy-web.cjs managed) ---` … `# --- /whale-notebook panel ---`），同文件可能含其它插件的行 | R 运行时段（摘除走 `uninstall detach`，内部驱动 deploy-web `--undo`） |
 
 ### 运行数据目录 `~/.dsh/whale-notebook/` 内部
@@ -111,7 +111,8 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 浏览器 | `lib/client.js` | 决策箱悬浮面板 bundle（`__ModuleLoader__` 零依赖纯 DOM；轮询 + 三动作；v0.3：红 ✕ / 判定表模板 / detail 预取 / `[WHALE-RISK]` 观察→红色警示条→一键转人工讨论；v0.4：**双卡** 待审箱｜已解决墙；v0.5：⟳ 先触发增量扫描再刷新、暂存提示；v0.7：💬 讨论消息带同族证据 + 「族×N」小标） | `apply`（browser） |
 | 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 profiles/web/cordis.patch.yml 的标记区） | — |
 | ★部署 | `scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 → `profiles/web/node_modules` + 在 `profiles/web/cordis.patch.yml` 标记区插/摘加载器行（幂等 dry/apply/undo/check；**v0.7.1 起 `check` 含与权威源逐文件字节对账**，副本陈旧即 exit 1——避免「check 通过却没部署」；生效需重启 dsh web） | — |
-| 测试 | 9 套自检：`lifecycle`(104) · `ui/server`(45) · `core/privacy·summarize·similarity`(10+10+20) · `collector/engine·engine.dedup·e2e·live`(10+19+60+34) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(13) | **2026-09-10 共 312 断言 + bundle 桩 + 13 打码断言，全绿** | — |
+| ★维护 | `scripts/links-doctor.cjs` | 工具主目录**悬空链接（junction/死链）**体检/清理：**默认只读**（exit 3 = 发现悬空）；`--apply` 逐条复验后**只摘链接本身**（根外路径/实体目录/有效链接/目标已修复一律不碰），跑完自动复查。成因 = pnpm/npx 重装换掉旧 junction 指的目标；危害 = ripgrep 搜索模式 exit 2 → **整次检索结果被丢弃**（条目 E005）。纯 CLI，不影响部署，无需重启 | `scanDangling`、`removeLinks`、`isUnder` |
+| 测试 | 9 套自检：`lifecycle`(104) · `ui/server`(45) · `core/privacy·summarize·similarity`(10+10+20) · `collector/engine·engine.dedup·e2e·live`(10+19+60+34) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(13) + `scripts/links-doctor.selftest.cjs`(43) | **2026-09-10 共 312 断言 + bundle 桩 + 13 打码断言，全绿**；同日新增维护工具 links-doctor 43 断言亦全绿 | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦；速查见 `lifecycle/README.md`） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单；R 段标 `managedBy`/`markers`，state=probe 由现场探测） | — |
 
@@ -145,7 +146,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 ## 8. 现状与路线图
 
-> 当前 `plugin` 版本 **v0.7.2** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
+> 当前 `plugin` 版本 **v0.7.3** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
 
 | 版本 | 一句话 | 状态 |
 |---|---|---|
@@ -159,9 +160,10 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 0.6.x | 拉取式采集（暂存 →「复盘」入箱）+ `--rebuild` + 类别判定收紧 + 已处置签名去重 | ✅ |
 | 0.7.0 | 同族确定化：族合并 / `GET /whale/related` / 面板「族×N」/ 技能固定动作 | ✅ |
 | 0.7.1 | 回声过滤补漏：`META_DUMP` 三类「转储/回显」签名（转储信封 / 会话记录 JSON 信封 / notebook 表行） | ✅ |
-| **0.7.2** | **回声表行判据修正**：去掉行首锚（成功路径会压成单行）＋时间戳行要求后随类别词 | ✅ 当前（宿主半边待重启） |
+| 0.7.2 | 回声表行判据修正：去掉行首锚（成功路径会压成单行）＋时间戳行要求后随类别词 | ✅ |
+| **0.7.3** | **讨论落点路由**（💬 按候选来源选落点：跨项目 → 固定「鲸鱼全局」工作区／单项目 → 该项目／未知歧义 → 回退当前并说明；页脚三态开关）＋ `/whale/inbox` 归档列修复 ＋ **类别展示契约**（`error` 有标题、文档墙与面板分组排序一致）＋ **CLI 退出码契约**（0/2/1）＋ 面板样式节点回收 | ✅ 当前（宿主半边待重启） |
 
-- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（副本是否最新以 `deploy-web --check` 字节对账为准；权威源已 0.7.2，需 `--apply` 后重启）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启。
+- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（副本是否最新以 `deploy-web --check` 字节对账为准；权威源已 0.7.3，需 `--apply` 后重启）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启。
 - **回声过滤补漏（v0.7.1／v0.7.2）**：v0.5 的 `isMetaEcho` 只挡「助手叙述 / 探针输出」类回声；**工具结果里对历史日志、sidecar、`state.json` 的转储与 notebook 自渲染行**（例：诊断脚本打印的 `==== L### <kind>` 信封、`| C### | … |` 候选行）不含既有强特征，会被当成新事件开行——实测同一物理事件在复盘会话里被重新开行为候选。v0.7.1 新增单条命中即判的 `META_DUMP` 三类签名（会话日志转储信封 / 会话记录 JSON 信封 / notebook 表行），**只认渲染痕迹、不认失败语义**，故同一失败原文照收；`live.selftest` +4 断言（含「不误伤原文」反证）。**v0.7.2 修正**：表行判据原带 `^` 行首锚，而成功路径会把输出压成单行（`raw.replace(/\s+/g, ' ')`），带锚永远匹配不到——实测「打印 echo 归档行」的命令输出照样进暂存；现改为不锚定，并要求时间戳行后随类别词，免得误伤普通表格（自测 +2，含反证）。宿主半边需重启 dsh web 生效。
 - **未来**：会话平面挂载（工具/事件）；B2 项目级自动注入（项目根 AGENTS.md，逐项目知情试点）；复发检测深化（二期）；面板增强（桌宠形态/事件推送，契约已备）。
 
@@ -185,16 +187,20 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--add|--prewarm|--stats|--full|--rebuild|--render-rules|--wall
                                                                    # 采集 CLI(v1 壳): --check 增量(热启 ~10ms) / --add 暂存冲入待审箱(v0.6) /
                                                                    #   --stats 纯只读 / --full 全量校验 / --rebuild 从头梳理(v0.6.1) / --wall 已解决墙预览(v0.4)
+                                                                   #   退出码(v0.7.3): 0 成功(有新发现亦为 0) / 2 前置缺失(sessions 或数据目录不存在) / 1 失败
 node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周期沙盒自测(104 PASS, 含 R 段与"不碰真实部署"反证)
 node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check|install|uninstall detach|remove|purge …
                                                                    # 生命周期工具(v0.1.1: R 段真登记/对账, detach 驱动 deploy-web)
 node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--check|--undo]   # R 段唯一写入者(改后需重启 dsh web)
-node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs       # 面板 host 逻辑沙盒自测(45 PASS, 含 v0.4 墙/B1、v0.7 related)
+node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs       # 面板 host 逻辑沙盒自测(50 PASS, 含 v0.4 墙/B1、v0.7 related、v0.7.3 类别展示契约)
 node ~/.dsh/whale-notebook/plugin/src/core/similarity.selftest.cjs # v0.7 相似度/族判定(20 PASS, 含「不得误并」反证)
 node ~/.dsh/whale-notebook/plugin/src/core/privacy.selftest.cjs | summarize.selftest.cjs   # 打码出口 / 一句话(10+10)
 node ~/.dsh/whale-notebook/plugin/src/collector/engine.selftest.cjs | engine.dedup.selftest.cjs | e2e.selftest.cjs | live.selftest.cjs
-                                                                   # detail 协议(10) / 已处置去重(19) / zstd 全链(60) / 实时(34，v0.7.1 +4 / v0.7.2 +2 回声签名断言)
-node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs         # client bundle 桩检查(v0.4–v0.7 结构断言)
+                                                                   # detail 协议(10) / 已处置去重(19) / zstd 全链(63，v0.7.3 +3 CLI 退出码) / 实时(34，v0.7.1 +4 / v0.7.2 +2 回声签名断言)
+node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs         # client bundle 桩检查(v0.4–v0.7.3 结构断言, 含样式节点回收)
+node ~/.dsh/whale-notebook/plugin/scripts/links-doctor.cjs [--json|--root <dir>|--depth <n>|--apply]
+                                                                   # 维护体检: 工具主目录悬空链接(死链); 默认只读(exit 3=有悬空), --apply 才删(只摘链接)
+node ~/.dsh/whale-notebook/plugin/scripts/links-doctor.selftest.cjs # 维护工具自测(43 PASS: 只读/根外拒删/目标已修复不删/幂等)
 node ~/.dsh/whale-notebook/scripts/redact.test.cjs                 # 打码回归(13)
 node <repo>/tools/sync-release.cjs                                 # 一键同步提交(库内; 镜像→commit→push)
 ```

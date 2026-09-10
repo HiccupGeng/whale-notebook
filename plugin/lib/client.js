@@ -104,15 +104,17 @@ window.__ModuleLoader__.load({
 			".wh-alert-btn-primary{background:#e5484d;color:#fff}",
 			".wh-alert-btn-ghost{background:rgba(128,128,128,.14)}"
 		].join("");
+		// v0.7.3：返回"本次创建的 style 节点"（复用既有则返回 null）——谁创建谁回收：
+		//   跨代复用的节点不能被后一代卸载时误删（否则会打断仍在运行的上一代面板）。
 		function ensureCss() {
-			if (typeof document === "undefined") return;
-			if (document.querySelector("style[data-plugin-css=\"" + CSS_ID + "\"]") === null) {
-				var tag = document.createElement("style");
-				tag.dataset.plugin = "@deepseek-ai/dsh-whale-notebook";
-				tag.dataset.pluginCss = CSS_ID;
-				tag.textContent = CSS;
-				document.head.appendChild(tag);
-			}
+			if (typeof document === "undefined") return null;
+			if (document.querySelector("style[data-plugin-css=\"" + CSS_ID + "\"]") !== null) return null;
+			var tag = document.createElement("style");
+			tag.dataset.plugin = "@deepseek-ai/dsh-whale-notebook";
+			tag.dataset.pluginCss = CSS_ID;
+			tag.textContent = CSS;
+			document.head.appendChild(tag);
+			return tag;
 		}
 		//#endregion
 		//#region helpers
@@ -425,7 +427,7 @@ window.__ModuleLoader__.load({
 		//#region panel
 		function apply(ctx) {
 			if (typeof document === "undefined") return;
-			ensureCss();
+			var cssNode = ensureCss(); // v0.7.3：本次创建的样式节点（卸载时由 disposer 回收）
 			var sessions = null;
 			var workspaces = null;
 			try { sessions = ctx.get("sessions"); } catch (e) { /* 面板降级为只读 */ }
@@ -1006,6 +1008,8 @@ window.__ModuleLoader__.load({
 					if (box && box.parentNode) box.parentNode.removeChild(box);
 					if (toastEl && toastEl.parentNode) toastEl.parentNode.removeChild(toastEl);
 					if (alertEl && alertEl.parentNode) alertEl.parentNode.removeChild(alertEl);
+					// v0.7.3：只回收本次创建的样式节点（复用既有时 cssNode 为 null，不动别人的节点）
+					if (cssNode && cssNode.parentNode) cssNode.parentNode.removeChild(cssNode);
 				};
 			}, "whale-panel: lifecycle");
 

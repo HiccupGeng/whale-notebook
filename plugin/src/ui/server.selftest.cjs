@@ -23,6 +23,8 @@ fs.writeFileSync(path.join(nb, 'inbox.md'), HEADER + LINES + '\n', 'utf8');
 const repo = require('../store/repo.cjs');
 const server = require('./server.cjs');
 const agents = require('../inject/agents.cjs');
+const { PATTERNS } = require('../collector/patterns.cjs');
+const { CATEGORY_TITLES, categoryTitle, categoryRank, sortCategoryKeys } = require('../core/schema.cjs');
 let fails = 0;
 function check(name, cond, extra) {
   if (cond) { console.log('PASS ' + name); }
@@ -159,6 +161,39 @@ try {
   const body2 = agents.buildSectionBody([{ status: 'active', scope: 'project', category: 'secret', rule: 'r', occurrences: 99, id: 'E9' }], {});
   check('agents 只有项目级时提示去向', body2.indexOf('暂无全局规则') !== -1 && body2.indexOf('INDEX.md') !== -1 && body2.indexOf('【secret】') === -1, body2.split('\n').filter((l) => l.indexOf('状态：') !== -1)[0]);
 
+  // ============ v0.7.3 类别展示契约：标题完备 + 两侧排序一致 ============
+  check('v0.7.3 类别标题完备：PATTERNS 全部 id + error 都有标题（新增类别漏登记即失败）',
+    PATTERNS.map((p) => p.id).concat(['error']).every((id) => CATEGORY_TITLES[id] && CATEGORY_TITLES[id] !== id),
+    PATTERNS.map((p) => p.id).concat(['error']).filter((id) => !CATEGORY_TITLES[id]));
+  check('v0.7.3 error 有中文标题 / 未登记类别兜底为裸键',
+    categoryTitle('error') === '工具报错（未归类的失败结果）' && categoryTitle('zzz-unregistered') === 'zzz-unregistered',
+    [categoryTitle('error'), categoryTitle('zzz-unregistered')]);
+  const sk = sortCategoryKeys(['zzz-unregistered', 'other', 'error', 'encoding']);
+  check('v0.7.3 排序契约：按登记秩排序 + 未登记排末尾 + 可复现',
+    sk.join('|') === 'encoding|error|other|zzz-unregistered' &&
+    categoryRank('zzz-unregistered') === Object.keys(CATEGORY_TITLES).length &&
+    sortCategoryKeys(['zzz-unregistered', 'other', 'error', 'encoding']).join('|') === sk.join('|'), sk);
+  // 造两条全局 active（error 与未登记类别）→ 文档墙与面板必须同序（此前 viewmodel 排最前、repo 排最后）
+  mkEntry({
+    id: 'E005', slug: 'err', title: '未归类报错样本', category: 'error', status: 'active', scope: 'global', projects: [],
+    occurrences: 2, firstSeen: '2026-09-10', lastSeen: '2026-09-10', workspaces: ['SandBox1'], rule: '失败原文先归类再入库', created: '2026-09-10', updated: '2026-09-10', sources: [],
+    symptom: 's', rootCause: 'r', actions: 'a', verification: '',
+  });
+  mkEntry({
+    id: 'E006', slug: 'unknown-cat', title: '未登记类别样本', category: 'zzz-unregistered', status: 'active', scope: 'global', projects: [],
+    occurrences: 1, firstSeen: '2026-09-10', lastSeen: '2026-09-10', workspaces: ['SandBox1'], rule: '新增类别必须登记标题', created: '2026-09-10', updated: '2026-09-10', sources: [],
+    symptom: 's', rootCause: 'r', actions: 'a', verification: '',
+  });
+  const mdCat = repo.buildIndexMd(repo.listEntries());
+  const gsec = mdCat.split('## 🐳 全局区')[1].split('## 📁 项目区')[0];
+  const mdTitles = gsec.split('\n').filter((l) => l.indexOf('### ') === 0).map((l) => l.slice(4).replace(/（\d+）$/, ''));
+  const pvTitles = server.solvedPayload().global.map((g) => g.title);
+  check('v0.7.3 墙分组两侧一致：error 用中文标题、未登记类别两侧都排末尾',
+    pvTitles.join('|') === mdTitles.join('|') &&
+    mdTitles.indexOf('工具报错（未归类的失败结果）') !== -1 &&
+    mdTitles[mdTitles.length - 1] === 'zzz-unregistered' &&
+    mdTitles.indexOf('工具报错（未归类的失败结果）') < mdTitles.indexOf('zzz-unregistered'),
+    { mdTitles, pvTitles });
 
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

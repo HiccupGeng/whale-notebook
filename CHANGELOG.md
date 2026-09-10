@@ -1,7 +1,40 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.0`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.3`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+
+## v0.7.3（2026-09-10）讨论落点路由 · 类别展示契约 · CLI 退出码
+
+**要解决的四个问题**（都属"判断依据不可靠"，不是功能缺失）：
+
+- ① **💬 讨论落点不可控**：面板把候选转成新会话时，会话固定开在"当前会话的工作区"——跨项目的候选被开进无关项目，讨论上下文自带噪声。
+- ② **类别展示口径缺失**：`error` 是采集**主力类别**（`scanner.cjs` 对任何工具失败结果直接判 `error`，`engine.cjs` 还为它单独开了绕过模式白名单的特权），但 `CATEGORY_TITLES` 里**唯独没有它的标题**；更麻烦的是两个消费者对"未登记类别"的排序判断**相反**——面板（`viewmodel.cjs` 用 `indexOf` → `-1`）排到最前，文档墙（`repo.cjs` 用 filter 追加）排到最后，同一份数据两侧分组顺序不一致。
+- ③ **CLI 退出码恒 0**：`mine.cjs` / `collector/cli.cjs` 成功与失败都返回 `0`——全项目唯一例外（`lifecycle/cli.cjs` 0/1/2、`deploy-web` 0/1、`links-doctor` 0/3/1、7 个 selftest 都有退出码）。数据目录缺失时会打印一行错误却返回 0，等于**静默失效**。
+- ④ **面板样式节点未回收**：`ensureCss()` 注入的 `<style>` 是唯一不在 `ctx.effect` disposer 里的副作用。
+
+**实现**
+
+- **讨论落点路由**（`lib/client.js`）：跨项目候选 → 开在固定的「鲸鱼全局」工作区（惰性注册并缓存 workspaceId）；单项目 → 开在该项目工作区；未知/歧义 → 回退当前工作区并在 toast 说明依据。页脚加三态开关（自动 / 强制🐳全局 / 强制📁项目，`localStorage` 记忆），落点与判定依据写进新会话开局消息。bundle 不能 `require`，故经 `exports.__internals` 暴露纯函数供自测——`scripts/discuss-route.selftest.cjs` 28 断言。
+- **`/whale/inbox` 归档列修复**（`src/ui/server.cjs`）：inbox 行本身以 `|` 结尾，旧写法直接续上 ` | 面板删除 …` 会让归档表多出一列、处置列错位；自测加「归档行恰为 7 列」断言。另修面板收起/外点/Esc 后卡片状态回填错误、以及"重绘判据以卡片可见兜底"。
+- **类别展示契约**（`src/core/schema.cjs`）：新增 `error: '工具报错（未归类的失败结果）'`（位置刻意放在具体类别之后、`other` 之前）；把"标题兜底 + 排序秩"收成 `CATEGORY_ORDER` / `categoryTitle` / `categoryRank` / `sortCategoryKeys` 一处并导出，`repo.cjs`（文档墙 `INDEX.md`）与 `viewmodel.cjs`（面板已解决墙）改为调用它 → **未登记类别两侧一律排末尾**。自测 +4，含**完备性断言**（`PATTERNS` 全部 id + `error` 都必须有标题，将来新增类别漏登记即失败）。
+- **CLI 退出码契约**（`scripts/mine.cjs`）：`0` 成功（"有新发现/有暂存"亦为成功）／`2` 前置缺失（`sessions` 根或数据目录不存在，对齐 `lifecycle/cli.cjs` 的 2）／`1` 失败或结果形状异常。**唯一进程级出口**放在薄壳里，`cli.run()` 与 `engine.runScan()` 保持纯函数——宿主半边 `POST /whale/scan` 走的是 `engine.runScan`，不经 `cli.run()`，故退出码不会污染 `dsh web` 进程。自测 +3（正常 0 / 两处 `ok:false` → 2 / 早返回分支 0）。
+- **面板样式节点纳入 disposer**（`lib/client.js`）：`ensureCss()` 改为返回**本次创建**的节点（复用既有则 `null`），`apply` 记住 `cssNode`，disposer 只回收属于自己的那个——"谁创建谁回收"，避免后一代卸载误删上一代仍在用的节点。bundle 桩 +2 结构断言。
+
+**验证**：9 套件 **320 PASS / 0 FAIL**（server 50 · privacy 10 · summarize 10 · similarity 20 · engine 10 · engine.dedup 19 · e2e 63 · live 34 · lifecycle 104）＋ `bundle-smoke`（v0.4–v0.7.3 结构完整，含样式回收）＋ `redact.test` 13 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28，全绿。
+
+## v0.7.2（2026-09-10）回声表行判据修正
+
+**要解决的问题**：v0.7.1 新增的表行判据带了 `^` 行首锚，**而成功路径会先把工具输出压成单行**（`raw.replace(/\s+/g, ' ')`），带锚则永远匹配不到——实测「打印 echo 归档行」的命令输出照样进暂存。
+
+- 三条表行判据改为**不锚定**，并要求时间戳行后随类别词，免得误伤普通表格。
+- 自测：`live.selftest` +2（含反证）。宿主半边需重启 dsh web 生效。
+
+## v0.7.1（2026-09-10）回声过滤补漏 + `deploy-web --check` 字节对账
+
+**要解决的问题**：v0.5 的 `isMetaEcho` 只挡「助手叙述 / 探针输出」类回声；**工具结果里对历史日志、sidecar、`state.json` 的转储与 notebook 自渲染行**（例：诊断脚本打印的 `==== L### <kind>` 信封、`| C### | … |` 候选行）不含既有强特征，会被当成新事件开行——实测同一物理事件在复盘会话里被重新开行为候选。
+
+- 新增单条命中即判的 `META_DUMP` 三类签名（会话日志转储信封 / 会话记录 JSON 信封 / notebook 表行）；**只认渲染痕迹、不认失败语义**，故同一失败原文照收。自测：`live.selftest` +4（含「不误伤原文」反证）。
+- 另修 `deploy-web --check`：补与权威源**逐文件字节对账**，副本陈旧即 exit 1——此前只核结构，实测出现过「check 通过但副本仍是 0.7.0、重启后没生效」；副本多余文件只提示不判失败（dsh/pnpm 重装可能留下附带文件）。
 
 ## v0.7.0（2026-09-10）同族确定化
 

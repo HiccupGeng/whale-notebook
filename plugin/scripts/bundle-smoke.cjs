@@ -51,4 +51,12 @@ for (const s of ['GLOBAL_WS', 'planDiscuss', 'ROUTE_MODES', '讨论落点', 'wh-
   if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.3 结构: ' + s);
 }
 if (!/var discussMode = readRouteMode\(\)/.test(code)) throw new Error('v0.7.3 约定：讨论模式必须从 localStorage 读初值');
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.3 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由）');
+// v0.7.3 内容断言：样式节点"谁创建谁回收"——apply 记住本次创建的节点，disposer 只回收它
+if (!/var cssNode = ensureCss\(\)/.test(code) || code.indexOf('if (cssNode && cssNode.parentNode) cssNode.parentNode.removeChild(cssNode);') === -1) {
+  throw new Error('bundle 缺少 v0.7.3 结构: 样式节点未纳入 disposer（cssNode 创建 + 回收）');
+}
+// v0.7.3 约定：复用既有样式节点时必须返回 null——否则后一代卸载会误删上一代仍在用的节点
+if (code.indexOf('!== null) return null;') === -1) {
+  throw new Error('v0.7.3 约定：ensureCss 复用分支必须返回 null（跨代不误删）');
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.3 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收）');

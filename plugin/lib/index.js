@@ -11,7 +11,7 @@ import engine from '../src/collector/engine.cjs';
 import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.2' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.3' };
 
 function sendJson(res, code, obj) {
   try {
