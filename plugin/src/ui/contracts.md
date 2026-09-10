@@ -7,7 +7,7 @@
 
 | 能力 | 入口 | 形状 |
 |---|---|---|
-| 待审小列表 | `ui/viewmodel.cjs → inboxViewModel()` | `{ rows:[{id,cat,n,ws,text,time,variants}], pending, headline }`（v0.6：`listPayload` 另附 `deferred` = 拉取式下已暂存未入箱的组数；v0.7：`variants` = 该候并由几个同族变体合并，面板块显示「族×N」） |
+| 待审小列表 | `ui/viewmodel.cjs → inboxViewModel()` | `{ rows:[{id,cat,n,ws,text,time}], pending, headline }`；`ui/server.cjs → listPayload()` 在其上增补**v0.6 `deferred`**（拉取式下已暂存未入箱的组数）与 **v0.7 每行 `variants`**（该候并由几个同族变体合并，面板显示「族×N」） |
 | 同族/相似候选（v0.7） | `ui/server.cjs → relatedPayload(id)` | `{ family:{cid,size,members[],score}, related:[{id,cat,text,score}], entries:[{id,title,score,cat}] }` — 讨论会话的**确定性依据**（程序算，不靠模型归纳） |
 | 统计 | `statsViewModel()` | `{ entries, active, byCategory, topRules }` |
 | 已解决墙（v0.4） | `solvedViewModel()` | `{ stats:{active,global,project,disabled}, global:[{cat,title,entries[]}], projects:[{ws,entries[]}], disabled[] }`（行=entryLight：id/title/category/rule/occurrences/lastSeen/scope/projects/workspaces，无正文） |

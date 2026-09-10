@@ -58,7 +58,7 @@ function assess(home, view) {
     // R 段(运行时): 写入/摘除动作归 managedBy 声明的工具(deploy-web.cjs), lifecycle 只登记与对账。
     // 对账结果进 res.runtime(信息级), 不参与 fails/diffs —— 因此不左右 check 退出码。
     if (def.segment === 'R') {
-      const r = runtimeProbe(home, def, M.ctxOf(home), site);
+      const r = runtimeProbe(def, M.ctxOf(home), site);
       if (r) {
         r.state = st;
         r.expected = st === 'installed';
@@ -133,7 +133,7 @@ function deployToolPath() { return path.join(C.pkgDir(), 'scripts', 'deploy-web.
 
 // 现场探测一条 R 条目: 目录看存在性; 带 markers 的(如 cordis.patch.yml)只看标记区是否在位 ——
 // 该文件可能同时含其它插件的行, 故既不能整文件 hash 判漂移, 也不能整文件替换。
-function runtimeProbe(home, def, ctx, se) {
+function runtimeProbe(def, ctx, se) {
   if (!se) return null;
   const p = se.path || C.resolvePathTpl(def.path, ctx);
   const fileExists = X.exists(p);
@@ -181,7 +181,7 @@ function realizeRuntime(home, site, def, ctx) {
   const list = [];
   for (const d of def.entries.filter((e) => e.segment === 'R')) {
     const se = site.entries.find((x) => x.id === d.id);
-    const r = runtimeProbe(home, d, ctx, se);
+    const r = runtimeProbe(d, ctx, se);
     if (!r) continue;
     se.state = r.state;
     se.adoptedAt = C.isoLocal();
@@ -201,7 +201,7 @@ function detachRuntime(home, opts) {
   // 用调用方传进来的 site 对象(而非重新 load): 否则本函数保存的 R 段状态会被调用方随后保存的旧对象覆盖
   const site = opts.site || M.loadSite(home);
   const probes = def.entries.filter((e) => e.segment === 'R')
-    .map((d) => runtimeProbe(home, d, ctx, site.entries.find((x) => x.id === d.id))).filter(Boolean);
+    .map((d) => runtimeProbe(d, ctx, site.entries.find((x) => x.id === d.id))).filter(Boolean);
   out('plan', `${level}: R 段(运行时足迹) = web 面板部署副本 + 加载器挂载行`);
   for (const r of probes) out('plan', `  · ${r.id} [登记 ${r.state}] 现场: ${r.detail} → ${r.path}`);
   // "有无足迹"以标记区/目录是否真的在位为准: patch 文件本身可能仍含其它插件的行(那不是本插件的足迹)
@@ -244,7 +244,7 @@ function detachRuntime(home, opts) {
   const after = [];
   for (const d of def.entries.filter((e) => e.segment === 'R')) {
     const se = site.entries.find((e) => e.id === d.id);
-    const r = runtimeProbe(home, d, ctx, se);
+    const r = runtimeProbe(d, ctx, se);
     if (!r) continue;
     se.state = r.state;
     se.adoptedAt = C.isoLocal();
