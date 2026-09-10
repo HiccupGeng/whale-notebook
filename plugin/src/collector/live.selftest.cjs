@@ -97,6 +97,13 @@ function evResult(cid, text, isError, t) {
       isMetaEcho('| C109 | git-net | 1 | SandBox1 | 复发（原 C087）：… | 2026-09-10 11:03 |')
       && isMetaEcho('| E002 | 推送失败多为瞬时网络 | 先判瞬时再重试 | 6 | 2026-08-17 |')
       && isMetaEcho('--- echo tail ---\n| 2026-09-10 12:21 | error | 2 | SandBox1 | edit requires reading "<file>" first |'));
+    // v0.7.1 修正：成功路径会把输出压成单行 → 表行判据必须不锚定（带 ^ 则实测漏网）
+    check('回声签名：压成单行后的 notebook 表行（不锚定）',
+      isMetaEcho('总行数=209 | 2026-09-10 14:22 | error | 1 | SandBox1 | edit requires reading "<file>" first')
+      && isMetaEcho('inbox 25 行 | C109 | git-net | 1 | SandBox1 | 复发（原 C087）：… | 2026-09-10 11:03 |'));
+    check('不误伤：普通表格（时间戳后不是类别词）不算回声',
+      isMetaEcho('| 2026-09-10 14:22 | 某表头 | 某值 |') === false
+      && isMetaEcho('| 2026-09-10 14:22 | foo | bar | baz |') === false);
     check('不误伤：同一失败原文本身（无转储信封）仍按真实故障处理',
       isMetaEcho("=== trying 140.82.114.3 ===\n=== trying 20.27.177.113 ===\nPUSH OK via 20.27.177.113\n[stderr]\ngit : fatal: unable to access 'https://github.com/o/r.git/': Recv failure: Connection was reset") === false);
 

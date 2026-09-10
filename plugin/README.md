@@ -1,6 +1,6 @@
-# dsh-whale-notebook 插件包（v0.7.1：回声过滤补漏 · 同族确定化 · 拉取式采集 · 实时入库 · 决策箱双卡 = 待审箱 + 已解决墙）
+# dsh-whale-notebook 插件包（v0.7.2：回声过滤补漏 · 同族确定化 · 拉取式采集 · 实时入库 · 决策箱双卡 = 待审箱 + 已解决墙）
 
-鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。**v0.6.1：`--rebuild` 清派生状态后从头梳理全部历史（`--rebuild --add` 一条命令扫完入箱）**。**v0.6.2：回声签名扩充 + 类别正则收紧（真实历史从零重扫候选 36 → 26，且无类别误判）**。**v0.6.3：已处置签名去重——把归档表当事实源，修掉「state 重置/重扫后同一个坑重复开行」（同一行曾先后开出 3 个编号）**。**v0.7.0：同族（family）确定化——`src/core/similarity.cjs` + L1 族合并 + `GET /whale/related` + 面板「族×N」，让「还有类似的问题可以一并处理」由程序算出、可复现可解释，而不是模型即兴归纳**。**v0.7.1：回声过滤补漏——工具结果里对历史日志/sidecar/`state.json` 的转储与 notebook 自渲染行（转储信封 `==== L### <kind>`、候选行 `| C### | … |`）不再被当成新事件开行（此前同一物理事件在复盘会话里被重新开行）；`META_DUMP` 只认渲染痕迹、不认失败语义，故同一失败原文照收**。**v0.7.1 另修 `deploy-web --check`：补与权威源逐文件字节对账，副本陈旧即 exit 1（此前只核结构，实测出现「check 通过但副本仍是 0.7.0、重启后没生效」）。**
+鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。**v0.6.1：`--rebuild` 清派生状态后从头梳理全部历史（`--rebuild --add` 一条命令扫完入箱）**。**v0.6.2：回声签名扩充 + 类别正则收紧（真实历史从零重扫候选 36 → 26，且无类别误判）**。**v0.6.3：已处置签名去重——把归档表当事实源，修掉「state 重置/重扫后同一个坑重复开行」（同一行曾先后开出 3 个编号）**。**v0.7.0：同族（family）确定化——`src/core/similarity.cjs` + L1 族合并 + `GET /whale/related` + 面板「族×N」，让「还有类似的问题可以一并处理」由程序算出、可复现可解释，而不是模型即兴归纳**。**v0.7.1：回声过滤补漏——工具结果里对历史日志/sidecar/`state.json` 的转储与 notebook 自渲染行（转储信封 `==== L### <kind>`、候选行 `| C### | … |`）不再被当成新事件开行（此前同一物理事件在复盘会话里被重新开行）；`META_DUMP` 只认渲染痕迹、不认失败语义，故同一失败原文照收**。**v0.7.1 另修 `deploy-web --check`：补与权威源逐文件字节对账，副本陈旧即 exit 1（此前只核结构，实测出现「check 通过但副本仍是 0.7.0、重启后没生效」）。**v0.7.2：修正回声表行判据的行首锚——成功路径会先把输出压成单行（`raw.replace(/\s+/g, ' ')`），带 `^` 则永远匹配不到（实测「打印 echo 归档行」的命令输出照样进暂存）；三条表行判据改为不锚定，并要求时间戳行后随类别词，免得误伤普通表格。**
 
 ## 模块地图
 
@@ -54,11 +54,11 @@ plugin/
 
 旧文件 → 新归属：`scripts/mine.cjs`=兼容薄壳（转发 cli.cjs）；`scripts/redact.test.cjs`=core/privacy 测试；数据文件(inbox/entries/state/settings/INDEX/archive)不动。
 
-## 部署：决策箱面板（v2.1 起已实现，现状 v0.7.1）
+## 部署：决策箱面板（v2.1 起已实现，现状 v0.7.2）
 
 设计文档：项目 `docs/2026_09_09_18_whale-notebook决策箱面板设计.md`（v2.1 基础）+ `docs/2026_09_09_22_whale-notebook决策箱v0.3实施计划.md` + `docs/2026_09_09_23_whale-notebook已解决墙与分类v0.4实施计划.md` + `docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md`（该文档 §4.7/§4.8 同时承载 v0.6 与 v0.7）。浏览器半边=悬浮侧边面板**双卡**：待审箱（⚡自动处理(暂隐)/💬详细讨论/✕删除）+ 已解决墙（全局区/项目区分组，行点击展开条目全文）；host 半边注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`GET /whale/solved`、`GET /whale/entry`、`GET /whale/live`、`GET /whale/related`、`POST /whale/inbox/delete`、`POST /whale/scan`。
 
-## 现状语义速览（v0.7.1）
+## 现状语义速览（v0.7.2）
 
 > 只写**现在的行为**。每条的完整沿革、起因与实测数据见仓库根 **`CHANGELOG.md`**；设计论证见 `docs/`。
 
@@ -66,7 +66,7 @@ plugin/
 - **增量**：`state.watermarks` 记每份会话日志的水位线；未更新只 stat 跳过，变大只读 `[offset,EOF)` 的新帧（帧边界与行边界对齐，末尾半写帧不推进 offset，下次自动重试）；水位线失效（截断/轮转）该文件退回全量。
 - **实时**：宿主半边订阅 `session/event`，与批扫共用同一判定层（`scanner.classifyRecord`）与入库路径（`engine.ingestFresh`）；去抖 1.5s、串行写盘、每轮现读现写 state，**零模型 token**，异常全吞不影响会话（`liveCapture:false` 可关）。
 - **拉取式**：`settings.autoAdd=false` 时新发现只进 `state.deferred`（上限 `maxDeferred`），说「小本本复盘」时 `mine.cjs --add` 才冲入待审箱；**已在箱候选命中共聚簇只累加次数**。
-- **回声过滤**：`scanner.isMetaEcho()` 三级签名（STRONG 单条即判 / WEAK 需 ≥2 条 / **v0.7.1 新增 META_DUMP，单条即判**：会话日志转储信封 `==== L### <kind>`、会话记录 JSON 信封、notebook 表行）过滤自引用、探针输出与「转储/回显」型回声，命中者落档 `archive/echo-<日期>.md` 再排除（不静默丢弃）。
+- **回声过滤**：`scanner.isMetaEcho()` 三级签名（STRONG 单条即判 / WEAK 需 ≥2 条 / **v0.7.1 新增 META_DUMP，单条即判（v0.7.2 起表行判据不锚定、时间戳行要求类别词）**：会话日志转储信封 `==== L### <kind>`、会话记录 JSON 信封、notebook 表行）过滤自引用、探针输出与「转储/回显」型回声，命中者落档 `archive/echo-<日期>.md` 再排除（不静默丢弃）。
 - **去重与复发**：`clusters[hash]→cid` 累加次数而不是新增重复行；已处置签名（**归档表为事实源**）压掉重复开行；候选已处置后再现 = **复发**，重开并标 `复发（原 C0xx）：`，`reAddCooldownDays`（默认 7 天）内只静默计数。
 - **同族**：未命中同文聚簇但与某「族」（同一 cid 的多个聚簇）相似 → **并入该族已有候选行**（累加次数 + sidecar 记「## 同族并入」），不新开行；同类阈值 **0.6** / 跨类 **0.8**（`familyThresholdSame/Cross` 可调）。
 - **数据口径**：待审行写入时 `|` 转全角 `｜`（否则该行无法被表格解析），解析统一走 `repo.parseInboxRows`；提醒句随 `autoAdd` 二选一（注入文本必须与实际行为一致）。
@@ -86,7 +86,7 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply
 
 - **生效差异（v0.5 起）**：浏览器半边 `lib/client.js` 改动**只需刷新页面**（loader 每请求现读磁盘 + `no-cache`）；宿主半边 `lib/index.js`/`src/**` 改动（实时采集、新端点如 `/whale/related`）**需重启 dsh web**（会中断在线会话，时机由用户定）；`mine.cjs` 增量批扫不依赖重启，立即可用。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可。
-- 验证（2026-09-10 实测全绿）：`node src/ui/server.selftest.cjs`(45) + `src/core/privacy|summarize.selftest.cjs`(10+10) + `src/core/similarity.selftest.cjs`(20) + `src/collector/engine|engine.dedup|e2e|live.selftest.cjs`(10+19+60+32) + `lifecycle/selftest.cjs`(104) = **9 套件 310 断言** + `node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4–v0.7 结构断言）+ `scripts/redact.test.cjs`(13 断言)，全绿。
+- 验证（2026-09-10 实测全绿）：`node src/ui/server.selftest.cjs`(45) + `src/core/privacy|summarize.selftest.cjs`(10+10) + `src/core/similarity.selftest.cjs`(20) + `src/collector/engine|engine.dedup|e2e|live.selftest.cjs`(10+19+60+34) + `lifecycle/selftest.cjs`(104) = **9 套件 312 断言** + `node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4–v0.7 结构断言）+ `scripts/redact.test.cjs`(13 断言)，全绿。
 
 ### 风险与前提（务必先读）
 

@@ -57,7 +57,10 @@ const META_WEAK = [
 //   ① 会话日志转储信封：`==== L3199 tool/result`（行号+记录类型）、`kind=tool/call`、`type=assistant/message`
 //   ② 会话记录 JSON 信封：`{"type":"tool/result"…}`（含反斜杠转义形态 `{\"type\":\"tool/result\"`）
 //   ③ notebook 自身渲染的表行：候选行 `| C### | … |`、条目行 `| E### | … |`、回声归档行 `| 时间 | 类别 | … |`
-const META_DUMP = /={3,}\s*L\d+\s+(?:tool|assistant|user|session|step|reasoning|text|permission|approval|sandbox|command|todo)[/-]|\bkind=(?:tool|assistant|user|step|session|permission|approval|sandbox|command)[/-]|\btype=(?:tool|assistant|user|step|session)[/-]|\\?"type\\?":\\?"(?:tool\/result|tool\/call|assistant\/(?:message|chunk)|user\/message|reasoning-chunks|text-chunks|tool-call-chunks|step\/(?:start|end)|session|command\/(?:run|done))\\?"|^\|\s*C\d{3}\s*\|[^|\n]*\|[^|\n]*\|[^|\n]*\||^\|\s*E\d{3}\s*\|[^|\n]*\||^\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|[^|\n]*\|[^|\n]*\|/m;
+// v0.7.1 修正（实测踩到）：③ **不能带 `^` 行首锚** —— 成功路径会先把输出压成单行
+//   （`raw.replace(/\s+/g, ' ')`），带锚则永远匹配不到（实测：打印 echo 归档行的命令输出照样进暂存）。
+//   故三条表行判据一律不锚定；「时间戳行」额外要求后随**类别词**，免得误伤普通表格。
+const META_DUMP = /={3,}\s*L\d+\s+(?:tool|assistant|user|session|step|reasoning|text|permission|approval|sandbox|command|todo)[/-]|\bkind=(?:tool|assistant|user|step|session|permission|approval|sandbox|command)[/-]|\btype=(?:tool|assistant|user|step|session)[/-]|\\?"type\\?":\\?"(?:tool\/result|tool\/call|assistant\/(?:message|chunk)|user\/message|reasoning-chunks|text-chunks|tool-call-chunks|step\/(?:start|end)|session|command\/(?:run|done))\\?"|\|\s*C\d{3}\s*\|[^|\n]*\|[^|\n]*\|[^|\n]*\||\|\s*E\d{3}\s*\|[^|\n]*\|[^|\n]*\||\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|\s*(?:encoding|stale-fs|sandbox-[a-z-]+|approval|tool-mode|git-net|secret|session-state|data-access|long-session|timeout|model-api|file-missing|port-busy|error|other)\s*\|/;
 
 function isMetaEcho(text) {
   const s = String(text == null ? '' : text);
