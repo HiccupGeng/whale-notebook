@@ -37,6 +37,71 @@ function fpOf(ev, key) {
   return `${ev.sid}|${ev.at}|${hash36(key)}`;
 }
 
+// v0.6.2：已处置签名索引 —— 防「重置后重扫」把同一行重复开成新候选。
+//   为什么需要：state 被重置/重建后，同一段会话日志会拿到新指纹与新聚簇哈希，
+//   于是同一个坑在每次重扫时又开一行候选（实测同一行先后出现 3 次）。
+//   可靠的事实源是归档表：行已处置即「已解决」，据此拦住新聚簇。
+//   摘要法：聚簇一句话文本被 oneLiner(…,90) 截断（JS slice 按 UTF-16 单元），
+//   归档行文本 ≤120 字符，故把归档文本同样按 90 截断后比较前缀即可稳定匹配。
+const SIG_TEXT_MAX = 90;
+function resolvedSig(cat, text) {
+  const body = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, SIG_TEXT_MAX);
+  return body ? `${cat}|${body}` : '';
+}
+// 归档行形态（实测 99 行里只有 2 行能按固定列数解析）：历史渲染过两轮 ——
+//   ① 早期：`| 编号 | 类别 | 次数 | 工作区 | 现象 | 时间 |`（6 列，无处置列）
+//   ② 批量清理后：在时间列旁又追加一列，且**行内残留半角 `|`**（现象列里的 `[stderr] … | …`）
+// 因此放弃"按列数解析"。稳定事实：前 4 列固定（编号/类别/次数/工作区）、末列=处置、次末列=时间。
+// 从两端取，并把时间列切掉 —— 现象文本必须与引擎聚簇文本一致，否则签名永远对不上。
+const ARCHIVE_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+function parseArchiveRow(line) {
+  const t = String(line || '').trim();
+  if (!/^\|\s*C\d+\s*\|/.test(t)) return null;
+  const parts = t.replace(/^\|/, '').replace(/\|$/, '').split('|').map((s) => s.trim());
+  if (parts.length < 6) return null;
+  const id = parts[0];
+  if (!/^C\d+$/.test(id)) return null;
+  const last = parts.length - 1;
+  const disposition = parts[last];
+  const hasTime = ARCHIVE_TIME_RE.test(parts[last - 1]);
+  // 现象列 = [4, end)：有「时间」列时 end 指向它（last-1），否则 end 指向处置列（last）
+  const end = hasTime ? last - 1 : last;
+  const mid = parts.slice(4, Math.max(4, end));
+  // 兜底：早期行把时间写成 `日期|时刻` 两列（含无处置列的旧行），尾部纯日期/时刻列一律切掉，
+  // 否则时间会被并进现象文本、与引擎聚簇文本不一致，签名永远对不上。
+  while (mid.length > 1 && (/^\d{4}-\d{2}-\d{2}$/.test(mid[mid.length - 1]) || /^\d{2}:\d{2}$/.test(mid[mid.length - 1]))) mid.pop();
+  const text = mid.join(' | ');
+  return { id, cat: parts[1], ws: parts[3], text, disposition, hasTime };
+}
+function loadResolvedIndex(dir) {
+  const index = new Set();
+  const base = dir || repo.P.archive;
+  let names; try { names = fs.readdirSync(base); } catch { return index; }
+  for (const name of names) {
+    if (!/^archive-.*\.md$/.test(name)) continue;
+    let text; try { text = fs.readFileSync(path.join(base, name), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      const row = parseArchiveRow(line);
+      if (!row || !row.disposition) continue;
+      const sig = resolvedSig(row.cat, row.text);
+      if (sig) index.add(sig);
+    }
+  }
+  return index;
+}
+
+// v0.6.2：已开行（在箱/已处置）的聚簇，其复发窗口已随风干 — 从索引里剔除，可重新开行。
+// 在 runScan 读 state 之后、ingest 之前调用（纯函数，便于单测）。
+function pruneResolvedIndex(state, index) {
+  const clusters = (state && state.clusters) || {};
+  let pruned = 0;
+  for (const h of Object.keys(clusters)) {
+    const sig = resolvedSig(clusters[h].cat, clusters[h].text);
+    if (sig && index.has(sig)) { index.delete(sig); pruned++; }
+  }
+  return pruned;
+}
+
 function findWorkspaceDirs(settings) {
   const denylist = settings.denylistWorkspaces || [];
   const dirs = [];
@@ -156,6 +221,8 @@ function ingestFresh(rawEvents, state, settings, opts) {
   const cap = Number.isFinite(settings.maxFingerprints) ? settings.maxFingerprints : DEFAULT_MAX_FINGERPRINTS;
   const seen = new Set(state.seenFingerprints || []);
   const clusters = state.clusters || (state.clusters = {});
+  // v0.6.2：已处置签名（归档表）→ 同签名的新聚簇不再开行（防重置后重扫重复开行）
+  const resolved = o.resolved instanceof Set ? o.resolved : new Set();
 
   const inboxOld = repo.readInboxText();
   const pendRows = repo.parseInboxRows(inboxOld);
@@ -215,6 +282,14 @@ function ingestFresh(rawEvents, state, settings, opts) {
       if (now - (c.reAddedAt || 0) < cooldownMs) { a.cid = c.cid; a.kind = 'silent'; c.silentN = (c.silentN || 0) + a.n; decisions.push(a); continue; }
       a.cid = c.cid; a.origin = c.cid; a.kind = 'readd'; decisions.push(a); continue;
     }
+    // v0.6.2：该内容已在归档里被处置过 → 不再开行（重置后重扫的重复候选由此被压掉）
+    if (resolved.has(resolvedSig(a.cat, a.text))) {
+      clusters[a.hash] = {
+        cid: null, cat: a.cat, text: a.text, n: a.n, first: a.first, last: a.last,
+        reAddedAt: now, reAdds: 0, silentN: a.n,
+      };
+      a.kind = 'resolved'; decisions.push(a); continue;
+    }
     const adopted = adoptBy.get(a.cat + '|' + a.text);
     if (adopted) {
       clusters[a.hash] = { cid: adopted, cat: a.cat, text: a.text, n: a.n, first: a.first, last: a.last, reAddedAt: 0, reAdds: 0 };
@@ -232,6 +307,7 @@ function ingestFresh(rawEvents, state, settings, opts) {
   const added = [];
   const bumped = [];
   const silent = [];
+  const suppressed = [];
   let dropped = 0;
   const countMap = new Map();
   const newRowLines = [];
@@ -248,6 +324,10 @@ function ingestFresh(rawEvents, state, settings, opts) {
       // 暂存（new / readd / silent 一视同仁：合并进摘要，等 --add 再入箱）
       const d = deferCluster(def, a, now);
       deferredList.push({ hash: a.hash, cat: a.cat, n: d.n, text: d.text });
+      continue;
+    }
+    if (a.kind === 'resolved') {
+      suppressed.push({ cat: a.cat, n: a.n, text: a.text });
       continue;
     }
     if (a.kind === 'silent') {
@@ -295,7 +375,7 @@ function ingestFresh(rawEvents, state, settings, opts) {
   state.clusters = clusters;
 
   return {
-    added, bumped, silent, dropped, deferred: deferredList, deferredTotal: Object.keys(def).length, deferredOn,
+    added, bumped, silent, suppressed, dropped, deferred: deferredList, deferredTotal: Object.keys(def).length, deferredOn,
     echo: echo.size, echoEvents: [...echo.values()].reduce((a2, e) => a2 + e.n, 0),
     pending: repo.pendingCount(inboxText), fresh: fresh.length, dry,
   };
@@ -310,11 +390,13 @@ function flushDeferred(state, settings, opts) {
   const maxNewRows = Number.isFinite(o.maxNewRows) ? o.maxNewRows : 30;
   const def = state.deferred || (state.deferred = {});
   const clusters = state.clusters || (state.clusters = {});
+  const resolved = o.resolved instanceof Set ? o.resolved : new Set();
   const inboxOld = repo.readInboxText();
   const pendIds = repo.pendingIds(inboxOld);
   const hashes = Object.keys(def).sort((x, y) => (def[x].first || 0) - (def[y].first || 0));
   const added = [];
   const bumped = [];
+  const suppressed = [];
   let dropped = 0;
   const countMap = new Map();
   const newRowLines = [];
@@ -333,6 +415,17 @@ function flushDeferred(state, settings, opts) {
       continue;
     }
     if (added.length >= maxNewRows) { dropped++; continue; } // 留在暂存里，下次 --add 再说
+    // v0.6.2：该内容已在归档里被处置过 → 不入箱（重置后重扫产生的暂存组由此被压掉）
+    const dText = d.text || (c && c.text) || '';
+    if (resolved.has(resolvedSig(d.cat, dText))) {
+      suppressed.push({ cat: d.cat, n: d.n, text: dText });
+      clusters[h] = {
+        cid: null, cat: d.cat, text: dText, n: (c && c.n ? c.n : 0) + d.n, first: d.first, last: d.last,
+        reAddedAt: now, reAdds: 0, silentN: ((c && c.silentN) || 0) + d.n,
+      };
+      delete def[h];
+      continue;
+    }
     const cid = state.nextCandidateId++;
     const id = 'C' + String(cid).padStart(3, '0');
     const readd = !!(c && c.cid && !pendIds.has(c.cid));
@@ -364,7 +457,7 @@ function flushDeferred(state, settings, opts) {
     inboxText = inboxText.trimEnd() + (inboxText.trim() ? '\n' : '') + header + newRowLines.join('\n') + '\n';
   }
   if (!dry && (countMap.size || newRowLines.length)) repo.writeInboxText(inboxText);
-  return { added, bumped, dropped, remaining: Object.keys(def).length, pending: repo.pendingCount(inboxText), dry };
+  return { added, bumped, suppressed, dropped, remaining: Object.keys(def).length, pending: repo.pendingCount(inboxText), dry };
 }
 
 function recurrenceNote(a, c, now) {
@@ -384,15 +477,16 @@ function runScan(mode, opts) {
   const state = repo.readState();
   // v0.6 --add：只把暂存摘要冲入待审箱，不重新扫描（O(暂存数)，与历史大小无关）
   if (mode === '--add') {
-    const out = flushDeferred(state, settings, { dry: o.dry });
+    const out = flushDeferred(state, settings, { dry: o.dry, resolved: loadResolvedIndex() });
     if (!o.dry) repo.writeState(state);
     const bits = [`入箱 ${out.added.length} 条(${out.added.map((r) => r.cat).join(',') || '无'})`];
     if (out.bumped.length) bits.push(`并入已有候选 ${out.bumped.length} 条(${out.bumped.map((b) => b.id).join(',')})`);
+    if (out.suppressed.length) bits.push(`已处置签名压掉暂存重复 ${out.suppressed.length} 组(不再开行)`);
     if (out.dropped) bits.push(`超单轮上限留在暂存 ${out.dropped} 组`);
     bits.push(`待审共 ${out.pending} 条`);
     bits.push(`剩余暂存 ${out.remaining} 组`);
     bits.push(`${Date.now() - t0}ms`);
-    return { ok: true, text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '), data: { added: out.added, bumped: out.bumped, dropped: out.dropped, remaining: out.remaining, pending: out.pending, dry: !!o.dry } };
+    return { ok: true, text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '), data: { added: out.added, bumped: out.bumped, suppressed: out.suppressed, dropped: out.dropped, remaining: out.remaining, pending: out.pending, dry: !!o.dry } };
   }
   // v0.6 --rebuild：清空派生状态后从头梳理全部历史
   // 语义：「第一次梳理」——水位线/指纹/聚簇/暂存全部清掉，历史里的每个坑都会被重新发现；
@@ -407,6 +501,10 @@ function runScan(mode, opts) {
   }
   // --stats/--prewarm 语义上是全量；settings.scanMode='full' 强制全量
   const full = rebuild || o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
+  // v0.6.2：已处置签名索引（见 loadResolvedIndex）。重建时聚簇被清空，无需剔除；
+  // 正常扫描时把「已开行的聚簇」从索引剔除，让它们走既有的复发语义（开「复发（原 C0xx）」行）而不是被压掉。
+  const resolvedIndex = loadResolvedIndex();
+  if (!rebuild) pruneResolvedIndex(state, resolvedIndex);
   const scan = scanHistory(state, settings, { full });
   const s = scan.stats;
   const scanLine = `解码 ${s.scanned}/${s.files} 文件（未更新跳过 ${s.skipped}）｜读取 ${(s.readBytes / 1048576).toFixed(2)}MB` +
@@ -446,7 +544,7 @@ function runScan(mode, opts) {
 
   // 默认 --check / --rebuild：新事件按聚簇合并/复发后入箱
   // v0.6：autoAdd=false 且未显式 --add 时改为暂存（不写 inbox）
-  const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true, add: o.add === true });
+  const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true, add: o.add === true, resolved: resolvedIndex });
   state.lastScan = Date.now();
   if (!o.dry) repo.writeState(state);
   const ms = Date.now() - t0;
@@ -460,6 +558,7 @@ function runScan(mode, opts) {
   }
   if (ing.bumped.length) bits.push(`累加已有候选 ${ing.bumped.length} 条(${ing.bumped.map((b) => b.id).join(',')})`);
   if (ing.silent.length) bits.push(`复发冷却静默 ${ing.silent.length} 条`);
+  if (ing.suppressed.length) bits.push(`已处置签名压掉重复候选 ${ing.suppressed.length} 条(重置后重扫不再重复开行)`);
   if (ing.dropped) bits.push(`超单轮上限丢弃 ${ing.dropped} 条(已记指纹)`);
   if (ing.echo) bits.push(`自引用回声过滤 ${ing.echo} 组/${ing.echoEvents} 条(落 archive/echo-*.md)`);
   bits.push(`待审共 ${ing.pending} 条`);
@@ -469,7 +568,7 @@ function runScan(mode, opts) {
     ok: true,
     text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '),
     data: {
-      added: ing.added, bumped: ing.bumped, silent: ing.silent, dropped: ing.dropped,
+      added: ing.added, bumped: ing.bumped, silent: ing.silent, suppressed: ing.suppressed, dropped: ing.dropped,
       deferred: ing.deferred, deferredTotal: ing.deferredTotal, deferredOn: ing.deferredOn,
       echo: ing.echo, echoEvents: ing.echoEvents, rebuild,
       pending: ing.pending, ms, scan: s, dry: !!o.dry,
@@ -513,4 +612,6 @@ function buildDetailMd(cid, r) {
 
 module.exports = {
   runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
+  // v0.6.2：已处置签名索引（防重置后重扫重复开行）
+  resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
 };

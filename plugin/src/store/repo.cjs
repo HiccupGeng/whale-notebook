@@ -19,6 +19,7 @@ const P = {
   settings: path.join(NB_DIR, 'settings.json'),
   entries: path.join(NB_DIR, 'entries'),
   archive: path.join(NB_DIR, 'archive'),
+  archiveDetails: path.join(NB_DIR, 'archive', 'details'),
   details: path.join(NB_DIR, 'details'),
   index: path.join(NB_DIR, 'INDEX.md'),
   agents: path.join(HOME, 'AGENTS.md'),

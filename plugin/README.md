@@ -66,6 +66,8 @@ v0.5.1 补充：**自引用/探针回声过滤**——`SELF_REF`/`ENC_DIAG_RE` �
 
 v0.6.2 补充（真实从零重扫三轮迭代而来）：① 回声签名扩充——简报技能自己的扫描输出（`### WORKSPACE:`/`filesWritten:`/`recentFiles:`/`real user msgs:`/`sessions: N`/`workspaces: N`/`asst: N`）、DSH 源码与 profile 摘录（行号前缀 `361: …`、YAML `- id: …`、`disabled: true`）、zstd 十六进制转储、含候选编号的自查输出（`C030 | model-api | …`）全部识别为回声；用户叙述侧补 `生成经验|经验库|避坑|运行记录` 框架词（元讨论不算运行坑）。② 类别正则收紧——`model-api` 原 `/429|insufficient|balance/` 会把「文件名清单里的字节数 429」「insufficient permissions」误判为模型 API 错，现改为限流/配额语境；权限类文本（`insufficient permissions`/`access is denied`/`拒绝访问`）归口 `sandbox-file`，而 ssh 的 `Permission denied (publickey)`、`Host key verification failed` 归口 `git-net`。效果：真实历史从零重扫的候选 36 → **26**，且无类别误判。
 
+v0.6.3 补充：**已处置签名去重（防「重置后重扫」重复开行）**——实测同一个坑会因 `state.json` 被重置（或 `--rebuild` 重扫）而反复开新候选行：同一段会话日志在新状态下拿到**新指纹 + 新聚簇哈希**，而原候选已不在 inbox，于是被当成全新坑（本机同一行先后开出 3 个候选编号）。修法不再依赖易失的 state，而是把**归档表当事实源**：`engine.loadResolvedIndex()` 收集「已处置」（末列非空）的归档行 → `resolvedSig(cat, text)`（类别 + 空白归一后 90 单元截断）建签名索引，新聚簇命中签名即**压掉不开行**（写入 `clusters[hash] = {cid:null, silentN}`，扫描输出报「已处置签名压掉重复候选 N 条」）；`flushDeferred`（`--add`）同规则。两处坑：① 归档行历史上有两种渲染形态（早期 6 列无处置列 / 批量清理后追加列且**行内残留半角 `|`**），故放弃按列数解析，改为 `parseArchiveRow`「前 4 列固定 + 从右端切掉时间列与处置列」；② 时间列必须切掉，否则会混进现象文本导致签名永远对不上。在箱聚簇会被 `pruneResolvedIndex` 从索引剔除，保留既有**复发**语义（重开并标「复发（原 C0xx）」）。新增自测 `src/collector/engine.dedup.selftest.cjs`（19 断言，含端到端复现「重置后重扫」与反证用例）。
+
 v0.6 语义要点：**拉取式（pull）**——`settings.autoAdd=false` 时，`--check` 照常增量扫描并推进水位线/指纹（8ms、0 token），但新发现不写 `inbox.md`，而是合并进 `state.json` 的 `deferred` 摘要（`{cat,text,n,first,last,ws[],refs[],excerpt}`，上限 `maxDeferred`）；用户主动说「小本本复盘 / 待审核箱」时才 `mine.cjs --add` 把暂存冲入待审箱（重建候选行 + `details/C###.md`，曾经处置过的标「复发（原 C0xx）」）。**已在待审箱里的候选不受影响**：命中共聚簇时仍只累加次数（不新增行）。**提醒句随开关二选一**（`agents.cjs`：注入文本必须与实际行为一致）：拉取式下只报一行「新发现 N 组已暂存（未入箱）」，不展开清单、不询问审核，比自动模式更省 token。**面板**：`GET /whale/inbox` 附带 `deferred` 组数，仅有暂存时候选入口不隐藏，卡片提示「回复『小本本复盘』入箱后审核」。实时采集（`liveCapture`）同样遵守 `autoAdd`：关掉也只暂存、不写箱。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md` §4.7。
 
 ```powershell
@@ -77,7 +79,7 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply
 
 - **生效差异（v0.5 起）**：浏览器半边 `lib/client.js` 改动**只需刷新页面**（loader 每请求现读磁盘 + `no-cache`）；宿主半边 `lib/index.js`/`src/**` 改动（实时采集、新端点）**需重启 dsh web**（会中断在线会话，时机由用户定）；`mine.cjs` 增量批扫不依赖重启，立即可用。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可。
-- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 45 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|e2e|live.selftest.cjs`（engine 10 + zstd 全链 51 + 实时 19 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4/v0.5/v0.6 结构断言）——共 6 套件 **145 断言** + bundle 桩，全绿（2026-09-10 v0.6.0）。
+- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 45 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|engine.dedup|e2e|live.selftest.cjs`（engine 10 + **去重 19** + zstd 全链 51 + 实时 19 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4/v0.5/v0.6 结构断言）——共 7 套件 **164 断言** + bundle 桩，全绿（2026-09-10 v0.6.3）。
 
 ### 风险与前提（务必先读）
 
