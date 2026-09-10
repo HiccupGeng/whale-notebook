@@ -78,7 +78,7 @@ function evResult(cid, text, isError, t) {
       (classifyUserMessage({ at: T0, text: '这个中文乱码报错又出现了，帮我看看', ws: 'W', sid: 's1' })?.cat) === 'encoding');
     // v0.6.2 二次：探针自查输出（含候选编号）与 ssh 鉴权归口
     check('回声签名：含候选编号的自查输出',
-      isMetaEcho('命中 2 条：\n--- C030 | model-api | LearningWebMediaCenter | ERROR ( message:Configuration error\n    摘录: insufficient permissions'));
+      isMetaEcho('命中 2 条：\n--- C030 | model-api | demo-proj-b | ERROR ( message:Configuration error\n    摘录: insufficient permissions'));
     const gn = PATTERNS.find((p) => p.id === 'git-net');
     check('ssh 鉴权失败归口 git-net（不被权限规则抢走）',
       gn.re.test('ssh : Warning: Permanently added ... Permission denied (publickey)')

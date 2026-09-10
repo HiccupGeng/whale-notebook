@@ -1,7 +1,7 @@
 # 鲸鱼闪闪发光的小本本（whale-notebook）— DSH 自我进化机制 实施记录
 
 > 日期：2026-09-09 ｜ 作者：DSH Agent（本机实施）｜ 版本：v1.0
-> 定位：DeepSeek Harness 侧的经验固化体系，借鉴 `C:\ClaudeCode\SandBox3\docs\` 两份 Claude Code 实施方案（经验避坑手册/三层防线）后按 DSH 原生机制落地。
+> 定位：DeepSeek Harness 侧的经验固化体系，借鉴另一台机器上 Claude Code 项目的两份实施方案（经验避坑手册/三层防线）后按 DSH 原生机制落地。
 
 ---
 
@@ -37,7 +37,7 @@
 - **只读**：仅解码读取 `~/.dsh/sessions` 全部工作区（3 个、9 会话）；写操作只限 inbox.md / state.json。
 - **事件源**：`tool/result` 的 isError + 命令类工具（pwsh/bash）成功结果的特征扫描 + 用户/助手叙述中高信号类别；read/grep 等结果内嵌文件内容**不**参与扫描（防误报）。
 - **特征表**：encoding / sandbox-ep / sandbox-file / stale-fs / timeout / git-net / model-api / file-missing / port-busy。
-- **打码**：github_pat_*/ghp_*/sk-*/AKIA/JWT/超长 base64/键值密钥 → `[REDACTED]`；`C:\Users\gengj\...` → `~`；绝对路径参数化 `<path>`。
+- **打码**：github_pat_*/ghp_*/sk-*/AKIA/JWT/超长 base64/键值密钥 → `[REDACTED]`；`C:\Users\<user>\...` → `~`；绝对路径参数化 `<path>`。
 - **增量**：指纹 = `会话id|时间|hash36(规范化文本)`；只追加新发现；自引用输出（mine/stats 文本含类别词）显式排除。
 - **命令**：`--check`（会话开头自动用，一行摘要）/ `--prewarm`（装机首扫，只记指纹）/ `--stats`（全量分布）。
 

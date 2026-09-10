@@ -13,10 +13,10 @@ fs.mkdirSync(path.join(nb, 'archive'), { recursive: true });
 
 const HEADER = '# 鲸鱼小本本 · 待审核箱（inbox）\n\n| 编号 | 类别 | 次数 | 工作区 | 现象（一行，已打码） | 首次出现 |\n|---|---|---|---|---|---|\n';
 const LINES = [
-  '| C001 | encoding | 3+ | SillyTavern-Agent 等 | 命令/请求体内联中文被控制台链路破坏成 `????` | 2026-08-17 19:33 |',
+  '| C001 | encoding | 3+ | demo-ws-a 等 | 命令/请求体内联中文被控制台链路破坏成 `????` | 2026-08-17 19:33 |',
   '| C002 | stale-fs | 7 | 全部工作区 | edit 报 old_string not found，同文件连环失败 | 2026-08-17 18:15 |',
   '| C003 | secret | 1 | SandBox1 | GitHub PAT 曾明文贴进聊天 | 2026-09-01 11:57 |',
-  '| C004 | session-state | 1 | SillyTavern-Agent | 任务全部完成但 todo 未翻 completed | 2026-08-17 19:20 |',
+  '| C004 | session-state | 1 | demo-ws-a | 任务全部完成但 todo 未翻 completed | 2026-08-17 19:20 |',
 ].join('\n');
 fs.writeFileSync(path.join(nb, 'inbox.md'), HEADER + LINES + '\n', 'utf8');
 

@@ -101,14 +101,14 @@
   "installedAt": "2026-09-09T16:30:00+08:00",
   "entries": [
     {
-      "path": "C:\\Users\\gengj\\.dsh\\skills\\whale-notebook.md",
+      "path": "C:\\Users\\<user>\\.dsh\\skills\\whale-notebook.md",
       "kind": "file",          // file: 整体属本插件；dir: 整目录属本插件；edit: 外部文件局部修改
       "owner": "plugin",       // plugin | user-memory(D段数据)
       "segment": "I",
       "state": "installed"
     },
     {
-      "path": "C:\\Users\\gengj\\.dsh\\AGENTS.md",
+      "path": "C:\\Users\\<user>\\.dsh\\AGENTS.md",
       "kind": "edit",
       "segment": "I",
       "markerBegin": "<!-- whale-notebook:rules -->",
@@ -119,10 +119,10 @@
       "state": "installed"
     },
     {
-      "path": "C:\\Users\\gengj\\.dsh\\profiles\\node_modules\\@deepseek-ai\\dsh-whale-notebook",
+      "path": "C:\\Users\\<user>\\.dsh\\profiles\\web\\node_modules\\@deepseek-ai\\dsh-whale-notebook",
       "kind": "dir",
       "segment": "R",
-      "state": "pending"       // seam 实测后启用
+      "state": "installed"     // 实现落点：web profile 的 node_modules(原设计稿写 profiles\node_modules, 已按 deploy-web.cjs 实际布局订正)
     }
   ]
 }

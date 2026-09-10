@@ -58,30 +58,24 @@ plugin/
 
 设计文档：项目 `docs/2026_09_09_18_whale-notebook决策箱面板设计.md`（v2.1 基础）+ `docs/2026_09_09_22_whale-notebook决策箱v0.3实施计划.md` + `docs/2026_09_09_23_whale-notebook已解决墙与分类v0.4实施计划.md` + `docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md`（该文档 §4.7/§4.8 同时承载 v0.6 与 v0.7）。浏览器半边=悬浮侧边面板**双卡**：待审箱（⚡自动处理(暂隐)/💬详细讨论/✕删除）+ 已解决墙（全局区/项目区分组，行点击展开条目全文）；host 半边注册 `GET /whale/inbox`、`GET /whale/inbox/detail`、`GET /whale/solved`、`GET /whale/entry`、`GET /whale/live`、`GET /whale/related`、`POST /whale/inbox/delete`、`POST /whale/scan`。
 
-v0.3 语义要点：现象行 = 规则精炼一句话（堆栈/`Error:` 清洗，≤90 字）；候选详情存 `~/.dsh/whale-notebook/details/C###.md`（源会话引用 + 打码摘录 ≤600 字，删除候选时随行进 `archive/details/`）；删除按钮=红色 ✕（移入归档，可恢复）；⚡自动处理模板内嵌判定表（只读诊断；补全型小修——不删除/不碰 DSH 结构/影响域封闭/可自验证——可自动执行，先预告后动手；禁区一律禁止，回复固定行 `[WHALE-RISK]`），面板轮询会话消息识别该标记后弹红色警示条并支持「转人工讨论」一键开新会话。
+## 现状语义速览（v0.7.0）
 
-v0.4 语义要点：条目 frontmatter 新增 `scope: global|project` + `projects: [项目…]`（缺省/旧条目 = global，零迁移；判定为语义判断，入库时 AI 建议 + 用户确认）；**B1**：AGENTS 自动段只收 scope=global（项目级永不注入全局，状态行注明去向）；已解决墙 = 轻口径（入库即已处理）——A1 文档墙（INDEX.md 升级：全局区/项目区 × 类别 + 停用收尾，`mine.cjs --wall` 预览）与 A2 面板「已解决」卡同源（viewmodel.solvedViewModel → `/whale/solved`；行详情 `/whale/entry?id=E###`）。
+> 只写**现在的行为**。每条的完整沿革、起因与实测数据见仓库根 **`CHANGELOG.md`**；设计论证见 `docs/`。
 
-v0.5 语义要点：**增量采集**——`state.json` v2 记每个会话日志的水位线 `{size,mtimeMs,offset,frames,ws,calls}`：未更新只 stat 跳过，变大只读 `[offset,EOF)` 的新帧（帧边界与行边界严格对齐，无需回收半行），末尾半写帧不推进 offset 下次自动重试；水位线失效（截断/轮转）该文件退回全量。**实时入库**——宿主半边订阅 `session/event`，与批扫共用同一判定层与 `ingestFresh`，去抖 1.5s、串行写盘、每轮现读现写 state，全程零模型 token，异常不影响会话（`liveCapture:false` 可关）。**聚簇索引**——`clusters[hash]→cid`：同一坑跨轮次再次出现时**累加次数**而不是新增重复行；候选已处置（不在 inbox）后再出现 = **复发**，重开候选并在现象列标 `复发（原 C0xx）：`，`reAddCooldownDays`（默认 7 天）内只静默计数。**CLI**：`--check`（增量）/`--full`（全量校验）/`--dry`（只看不写）；`--stats` 改为**纯只读**（旧版会写掉 seen 指纹，等于静默吞掉这批候选）。**面板**：⟳ = 先 `POST /whale/scan`（增量扫描）再刷新列表；`GET /whale/live` 暴露实时采集与水位线状态。**待审行**：写入时 `|` 转全角 `｜`（否则该行无法被表格解析）；解析收敛到 `repo.parseInboxRows`。**提醒句**：待审 > `reminderListMax`（默认 3）只报数字 + 提示面板，不再逐条列清单（省 token）。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md`。
+**采集**
+- **增量**：`state.watermarks` 记每份会话日志的水位线；未更新只 stat 跳过，变大只读 `[offset,EOF)` 的新帧（帧边界与行边界对齐，末尾半写帧不推进 offset，下次自动重试）；水位线失效（截断/轮转）该文件退回全量。
+- **实时**：宿主半边订阅 `session/event`，与批扫共用同一判定层（`scanner.classifyRecord`）与入库路径（`engine.ingestFresh`）；去抖 1.5s、串行写盘、每轮现读现写 state，**零模型 token**，异常全吞不影响会话（`liveCapture:false` 可关）。
+- **拉取式**：`settings.autoAdd=false` 时新发现只进 `state.deferred`（上限 `maxDeferred`），说「小本本复盘」时 `mine.cjs --add` 才冲入待审箱；**已在箱候选命中共聚簇只累加次数**。
+- **回声过滤**：`scanner.isMetaEcho()` 两级签名（STRONG 单条即判 / WEAK 需 ≥2 条）过滤自引用与探针输出，命中者落档 `archive/echo-<日期>.md` 再排除（不静默丢弃）。
+- **去重与复发**：`clusters[hash]→cid` 累加次数而不是新增重复行；已处置签名（**归档表为事实源**）压掉重复开行；候选已处置后再现 = **复发**，重开并标 `复发（原 C0xx）：`，`reAddCooldownDays`（默认 7 天）内只静默计数。
+- **同族**：未命中同文聚簇但与某「族」（同一 cid 的多个聚簇）相似 → **并入该族已有候选行**（累加次数 + sidecar 记「## 同族并入」），不新开行；同类阈值 **0.6** / 跨类 **0.8**（`familyThresholdSame/Cross` 可调）。
+- **数据口径**：待审行写入时 `|` 转全角 `｜`（否则该行无法被表格解析），解析统一走 `repo.parseInboxRows`；提醒句随 `autoAdd` 二选一（注入文本必须与实际行为一致）。
 
-实测（真实历史 23.88MB/13 会话）：冷启动全量 2233ms → 热启动 **11ms / 读取 0 字节 / 跳过 13 文件**；`--full` 复核新发现 0 条（增量无漏采）。
+**CLI**：`--check`（增量）· `--add`（暂存入箱）· `--prewarm` · `--stats`（**纯只读**）· `--full`（全量校验）· `--dry`（只看不写）· `--rebuild`（清派生状态后从头梳理全部历史）· `--render-rules` · `--wall`。
 
-v0.5.1 补充：**自引用/探针回声过滤**——`SELF_REF`/`ENC_DIAG_RE` 原先只作用于成功结果，`error` 类绕过，导致「维修采集器自身」的失败与探针输出全部进箱。新增 `scanner.isMetaEcho()` 两级签名（STRONG 单条命中即判；WEAK 需 ≥2 条同时命中，避免误伤真实故障文本），命中者标 `meta=true` 后由 engine **落档 `archive/echo-<日期>.md` 再排除**（不静默丢弃），扫描输出报「自引用回声过滤 N 组/M 条」，`GET /whale/live` 同步计数。效果：同一份真实历史新候选 **26 → 2**（留下的是真的沙箱拒绝坑）。
+**面板**：双卡（待审箱 / 已解决墙）。现象行 = 规则精炼一句话（≤90 字）；详情 `details/C###.md`（源会话引用 + 打码摘录 ≤600 字，删除候选随行进 `archive/details/`）；删除 = 红色 ✕（移入归档可恢复）；⚡ 自动处理只允许「补全型小修」（不删除 / 不碰 DSH 结构 / 影响域封闭 / 可自验证），禁区一律禁止并回复固定行 `[WHALE-RISK]` → 红色警示条 + 一键转人工讨论；`⟳` = 先 `POST /whale/scan` 再刷新；`GET /whale/live` 暴露实时采集与水位线状态；`GET /whale/related?id=C###` 给讨论会话三块确定依据（族成员 / 相似候选 / 可能已被条目覆盖）；行带「族×N」小标。**提醒句**：待审 > `reminderListMax`（默认 3）只报数字 + 提示面板，不再逐条列清单。
 
-v0.6.2 补充（真实从零重扫三轮迭代而来）：① 回声签名扩充——简报技能自己的扫描输出（`### WORKSPACE:`/`filesWritten:`/`recentFiles:`/`real user msgs:`/`sessions: N`/`workspaces: N`/`asst: N`）、DSH 源码与 profile 摘录（行号前缀 `361: …`、YAML `- id: …`、`disabled: true`）、zstd 十六进制转储、含候选编号的自查输出（`C030 | model-api | …`）全部识别为回声；用户叙述侧补 `生成经验|经验库|避坑|运行记录` 框架词（元讨论不算运行坑）。② 类别正则收紧——`model-api` 原 `/429|insufficient|balance/` 会把「文件名清单里的字节数 429」「insufficient permissions」误判为模型 API 错，现改为限流/配额语境；权限类文本（`insufficient permissions`/`access is denied`/`拒绝访问`）归口 `sandbox-file`，而 ssh 的 `Permission denied (publickey)`、`Host key verification failed` 归口 `git-net`。效果：真实历史从零重扫的候选 36 → **26**，且无类别误判。
-
-v0.6.3 补充：**已处置签名去重（防「重置后重扫」重复开行）**——实测同一个坑会因 `state.json` 被重置（或 `--rebuild` 重扫）而反复开新候选行：同一段会话日志在新状态下拿到**新指纹 + 新聚簇哈希**，而原候选已不在 inbox，于是被当成全新坑（本机同一行先后开出 3 个候选编号）。修法不再依赖易失的 state，而是把**归档表当事实源**：`engine.loadResolvedIndex()` 收集「已处置」（末列非空）的归档行 → `resolvedSig(cat, text)`（类别 + 空白归一后 90 单元截断）建签名索引，新聚簇命中签名即**压掉不开行**（写入 `clusters[hash] = {cid:null, silentN}`，扫描输出报「已处置签名压掉重复候选 N 条」）；`flushDeferred`（`--add`）同规则。两处坑：① 归档行历史上有两种渲染形态（早期 6 列无处置列 / 批量清理后追加列且**行内残留半角 `|`**），故放弃按列数解析，改为 `parseArchiveRow`「前 4 列固定 + 从右端切掉时间列与处置列」；② 时间列必须切掉，否则会混进现象文本导致签名永远对不上。在箱聚簇会被 `pruneResolvedIndex` 从索引剔除，保留既有**复发**语义（重开并标「复发（原 C0xx）」）。新增自测 `src/collector/engine.dedup.selftest.cjs`（19 断言，含端到端复现「重置后重扫」与反证用例）。
-
-v0.7.0 补充：**同族（family）确定化——「还有类似的问题可以一并处理」不再靠模型即兴归纳**。
-- 起因：面板 💬 把某条候选转新会话时，消息里只有**这一条**（`discussMessage` 只拼 `contextLine(r)` + 该条 sidecar），程序里唯一的「相似」是精确同文聚簇（`cat|tool|canonText` 全等），所以「还有类似」全是 LLM 自己翻 inbox 后的归纳——不可复现、可能漏、可能编。
-- 新增 `src/core/similarity.cjs`（纯函数）：`skeleton()` 剥掉易变部分（IP/端口/时间戳/行号/路径/字节数/会话 id/uuid），再做字符 3-gram + 包含度相似度；`bestFamily()` 按类别相容组选阈值（同类 0.6 / 跨类 0.8，`git-net|timeout|model-api` 视为 net，`error` 与任意类别相容）→ 判定**可复现、可解释、可调**（`settings.familyThresholdSame/Cross`）。
-- **L1 族合并**：族**复用既有 `state.clusters`**（同一 cid 的多个聚簇天然是一族，无需新增状态字段）。采集时未命中同文聚簇、但与某族相似 → **并入该族已有的候选行**（累加次数 + 把变体现象写进 sidecar 的「## 同族并入」段），而不是新开一行；该族若已被判为已处置则整族压掉（与 v0.6.3 的文本级守卫同义但按族生效）；族曾开行后被处置 → 仍走复发语义（标「复发（原 C0xx）」）。`--add`（`flushDeferred`）同规则。
-- **L2/L3 讨论会话拿确定依据**：新端点 `GET /whale/related?id=C###` 返回三块——`family`（族成员/变体/相似度）、`related`（其它在箱行相似度 ≥0.35）、`entries`（可能已被条目覆盖，相似度 ≥0.25 或同类别）；面板 💬 会先取它并把三块写进新会话消息（`relatedBlock`），消息末尾附固定动作「先看同族 → 判断是否同根因 → 是则合并为一条经验（occurrences 取总和）；再核对覆盖提示」。面板行带「族×N」小标（`listPayload.rows[].variants`）。
-- **L4 措辞固化**：技能「讨论」流程加为**第 0 步**（程序给依据；面板/端点不可用时退回读 inbox + `clusters` 同 cid 判族并写明判据），「入库」流程加同族合并口径（一条候选 = 一条经验，occurrences 取总和，对策覆盖全部变体）。
-- **边界（写进技能）**：同族 ≠ 一定同根因。程序保证「该看哪些」确定、可复现、可解释；是否同一根因由人/agent 给结论并说明依据。
-- 自检：新增 `src/core/similarity.selftest.cjs`（20 断言，含「不得误并」反证）与 e2e v0.7 段（同族合并/族成员同 cid/sidecar 记录/related 三块/不误并）；全仓 **202 断言全绿**（含 v0.6.3 dedup 19 条）。
-
-v0.6 语义要点：**拉取式（pull）**——`settings.autoAdd=false` 时，`--check` 照常增量扫描并推进水位线/指纹（8ms、0 token），但新发现不写 `inbox.md`，而是合并进 `state.json` 的 `deferred` 摘要（`{cat,text,n,first,last,ws[],refs[],excerpt}`，上限 `maxDeferred`）；用户主动说「小本本复盘 / 待审核箱」时才 `mine.cjs --add` 把暂存冲入待审箱（重建候选行 + `details/C###.md`，曾经处置过的标「复发（原 C0xx）」）。**已在待审箱里的候选不受影响**：命中共聚簇时仍只累加次数（不新增行）。**提醒句随开关二选一**（`agents.cjs`：注入文本必须与实际行为一致）：拉取式下只报一行「新发现 N 组已暂存（未入箱）」，不展开清单、不询问审核，比自动模式更省 token。**面板**：`GET /whale/inbox` 附带 `deferred` 组数，仅有暂存时候选入口不隐藏，卡片提示「回复『小本本复盘』入箱后审核」。实时采集（`liveCapture`）同样遵守 `autoAdd`：关掉也只暂存、不写箱。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md` §4.7。
+**条目与生效**：frontmatter 含 `scope: global|project` + `projects` 白名单（缺省/旧条目 = global，零迁移）；**B1**：AGENTS 自动段只收 `scope=global`（项目级永不进全局注入，状态行注明去向）；已解决墙 = 轻口径（入库即已处理），文档墙 `INDEX.md` 与面板「已解决」卡同源（`GET /whale/solved` / `GET /whale/entry?id=E###`）。
 
 ```powershell
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run

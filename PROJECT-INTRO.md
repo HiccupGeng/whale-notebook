@@ -45,12 +45,13 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `scripts/redact.test.cjs` | 打码回归测试（13 断言） |
 | `.lifecycle/` | ★生命周期站点状态：`manifest.json` 足迹清单 + `backups/` 字节快照（**remove 保留、purge 随 D 删除**） |
 
-### 发布仓库（GitHub：HiccupGeng/whale-notebook，private；工作区镜像 `C:\DeepSeekHarnes\SandBox1\whale-notebook\`）
+### 发布仓库（GitHub：HiccupGeng/whale-notebook，**public**（2026-09-10 起）；本地工作区镜像 `<工作区>\whale-notebook\`）
 
 | 路径 | 内容 |
 |---|---|
 | `PROJECT-INTRO.md` | 本文发布镜像（与权威一致，sync 自动带） |
-| `README.md` | 库门面：结构/现状路线/隐私边界/开发流 |
+| `README.md` | 库门面：**是什么 / 快速开始 / 用法 / 隐私 / 验证 / 版本沿革表**（手工维护，不参与镜像同步） |
+| `CHANGELOG.md` | **版本沿革明细**：每个版本解决了什么问题、怎么解决、实测数据（手工维护） |
 | `plugin/` | 插件包源码镜像（`~/.dsh/whale-notebook/plugin`） |
 | `docs/` | 设计/调研记录（九份，sync 自动带：v1 实施记录 → v2.0 架构/生命周期 → 生态调研 → 面板设计 → v0.3 → 需求梳理 → v0.4 → v0.5 实施计划，后者 §4.7/§4.8 同时承载 v0.6 与 v0.7） |
 | `tools/sync-release.cjs` | 一键同步提交：权威 → 库 → commit → push |
@@ -143,14 +144,20 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 ## 8. 现状与路线图
 
-- **v1**（已完成）：skill + scripts 落地（AGENTS 标记注入链路打通；本机有 12 条种子候选 C001–C012 待审）。
-- **v2.0**（已完成）：插件化模块重构（六模块 + 单向依赖；行为/数据不变式兼容）。
-- **v2.0.x**：第 0 功能「生命周期」完成（lifecycle 工具 + manifest + 演练；**2026-09-10 升 v0.1.1**：R 段真实登记/对账 + 清单版本迁移 + `detach` 驱动 deploy-web 摘除）；GitHub 私有库建立 + 一键同步工具 `tools/sync-release.cjs`。
-- **v2.1 + v0.3.0（代码与部署已完成，待用户重启 GUI 生效）**：决策箱悬浮侧边面板 —— host half（`/whale/*` API）+ browser half（client-plugin，零依赖 bundle）+ `deploy-web.cjs` 一键部署；v0.3.0 增强：现象行一句话、候选详情 sidecar（`details/C###.md` + `GET /whale/inbox/detail`）、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 上报 → 面板红色警示条 + 一键转人工讨论。设计见 `docs/2026_09_09_18_…面板设计.md` 与 `docs/2026_09_09_22_…v0.3实施计划.md`。**生效需用户择机重启 GUI**。
-- **v0.4.0（代码与部署已完成，随重启同批生效）**：已解决墙 + 两级分类 —— 条目 frontmatter 增 `scope`（global|project）+`projects` 白名单（缺省 global 零迁移）；**B1**：AGENTS 自动段只收全局规则，项目级不进全局注入（状态行注明去向）；A1 文档墙 INDEX.md（全局区/项目区 × 类别 + 停用收尾）+ A2 面板「已解决」卡（`GET /whale/solved`、`GET /whale/entry?id=E###`，行点击展开全文）。决策：①轻口径（入库=已处理）②A1+A2 一期都做 ③先 B1 后 B2（本次 B1；B2 项目级注入 = 三期试点）。设计见 `docs/2026_09_09_23_…需求梳理.md` 与 `docs/2026_09_09_23_…v0.4实施计划.md`。
-- **v0.5.0 / v0.5.1（代码与部署已完成）**：**增量采集**（`state.watermarks` 水位线只解新增帧；冷启 2233ms → 热启 7–16ms / 0 字节）+ **运行中实时入库**（宿主订阅 `session/event` → `collector/live.cjs`，去抖 1.5s、串行写盘、零 token、异常不影响会话）+ **聚簇索引**（同坑累加次数、已处置复发重开并标注）+ CLI `--dry`/`--full`/纯只读 `--stats`。v0.5.1：**自引用/探针回声过滤**（两级签名，落档 `archive/echo-*.md` 可审计）——真实历史预演 26 → 2 条真坑。设计见 `docs/2026_09_10_10_…v0.5开发实施计划.md`。
-- **v0.6.0 ~ v0.6.3（代码与部署已完成）**：**拉取式采集**（`settings.autoAdd=false`：扫描照常但新发现只进 `state.deferred`，用户说「小本本复盘」时 `mine.cjs --add` 才冲入待审箱）；**v0.6.1** `--rebuild` 清派生状态后从头梳理全部历史；**v0.6.2** 回声签名扩充 + 类别正则收紧（真实重扫 36 → 26 且无误判）；**v0.6.3** **已处置签名去重**（把归档表当「已处置」事实源，修掉 state 重置/重扫后同一坑重复开行）。同文档 §4.7。
-- **v0.7.0（代码与部署已完成）**：**同族（family）确定化**——`core/similarity.cjs`（骨架归一 + 3-gram，同类 0.6/跨类 0.8 可调）+ **L1 族合并**（同族变体并入既有候选行，sidecar 记「同族并入」，不新开行）+ **`GET /whale/related`**（族成员/相似候选/可能已覆盖条目三块）+ 面板「族×N」小标 + 技能「讨论」第 0 步与「入库」合并口径（一条候选 = 一条经验，occurrences 取总和）。同文档 §4.8。
+> 当前 `plugin` 版本 **v0.7.0** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
+
+| 版本 | 一句话 | 状态 |
+|---|---|---|
+| 1.0 | skill + scripts 落地，AGENTS 标记注入链路打通 | ✅ |
+| 2.0 | 插件化模块重构（六模块 + 单向依赖，行为/数据不变式兼容） | ✅ |
+| 2.0.x / lifecycle 0.1.x | 生命周期工具（安装/卸载/清单，三段足迹 + 两段式写操作）；0.1.1 起 R 段如实登记与对账 | ✅ |
+| 0.2.1 | 决策箱面板真实挂载（host half `/whale/*` API + browser half 零依赖 bundle + 一键部署） | ✅（宿主半边改动需重启 dsh web） |
+| 0.3.0 | 一句话现象 / 详情 sidecar / 红色 ✕ / 判定表 + `[WHALE-RISK]` 上报 | ✅ |
+| 0.4.0 | 已解决墙（INDEX + 面板卡）+ 全局/项目两级适用范围（B1） | ✅ |
+| 0.5.x | 增量采集 + 运行中实时入库 + 聚簇索引/复发 + 回声过滤 | ✅ |
+| 0.6.x | 拉取式采集（暂存 →「复盘」入箱）+ `--rebuild` + 类别判定收紧 + 已处置签名去重 | ✅ |
+| **0.7.0** | **同族确定化**：族合并 / `GET /whale/related` / 面板「族×N」/ 技能固定动作 | ✅ 当前 |
+
 - **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（部署副本已是 0.7.0）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启。
 - **未来**：会话平面挂载（工具/事件）；B2 项目级自动注入（项目根 AGENTS.md，逐项目知情试点）；复发检测深化（二期）；面板增强（桌宠形态/事件推送，契约已备）。
 
