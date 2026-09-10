@@ -111,7 +111,8 @@ const HELP = `dsh-whale-notebook lifecycle ${VERSION} — 安装/卸载/清单�
   check                       清单 vs 现场对账 + 孤儿扫描（有差异时退出码 1）
   install                     安装/登记（计划式: 默认只出计划, --apply 才执行）
   uninstall <level>           卸载。level = detach|remove|purge
-                                 detach: 仅 R 段（v2.1 挂载后启用）
+                                 detach: 仅 R 段(运行时足迹 = web 面板部署副本 + 加载器挂载行;
+                                         动作由 scripts/deploy-web.cjs --undo 执行, 加 --yes 连副本目录一起删)
                                  remove: R+I 段, D 段原样保留
                                  purge:  R+I+D, 须 --export-dir + --yes
   help
@@ -122,7 +123,7 @@ const HELP = `dsh-whale-notebook lifecycle ${VERSION} — 安装/卸载/清单�
   --seed-dir <dir>            素材源目录（内含 AGENTS.md / whale-notebook.md,
                               目标缺失时用于创建; 迁移/全新机用）
   --export-dir <dir>          purge 导出目录（必填）
-  --yes                       二次确认（purge 必填; remove 遇漂移时也需）
+  --yes                       二次确认（purge 必填; remove 遇漂移时也需; detach 时=连副本目录一起删）
   --home <dir>                覆盖 DSH_HOME（沙盒自测用）
 
 约定: 所有写操作先 --dry-run 出计划, 展示给用户确认后再 --apply。`;
