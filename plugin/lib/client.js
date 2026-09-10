@@ -522,11 +522,14 @@ window.__ModuleLoader__.load({
 				}
 				open = mode;
 				box.classList.remove("wh-open-inbox", "wh-open-solved");
-				box.classList.add(mode === "solved" ? "wh-open-solved" : "wh-open-inbox");
+				// v0.7.3 修复：mode=null（收起/外点/Esc）时旧写法走 else → 又补回 wh-open-inbox，
+				// 于是 open=null 而待审卡仍可见（分裂态）：refresh 的 open==="inbox" 门禁永不成立
+				// → 行列表静默冻结（删除照常成功、toast 照常弹、标题照常刷新，只有行不动）。
+				if (mode !== null) box.classList.add(mode === "solved" ? "wh-open-solved" : "wh-open-inbox");
 				if (mode === "inbox") {
 					refresh(true);
 					renderRows();
-				} else {
+				} else if (mode === "solved") {
 					refreshSolved(true);
 					renderSolved();
 				}
@@ -539,7 +542,9 @@ window.__ModuleLoader__.load({
 					pending = j.pending || 0;
 					deferred = j.deferred || 0;
 					applyState();
-					if (open === "inbox") renderRows();
+					// v0.7.3 加固：重绘判据以「卡片可见」兜底——只要待审卡在屏幕上，就必须跟着数据重绘；
+					// 任何 open 与类名分裂的路径都会在一个刷新周期（30s/焦点/删除后）内自愈。
+					if (open === "inbox" || box.classList.contains("wh-open-inbox")) renderRows();
 				}, function (err) {
 					// 宿主 API 未就绪（服务重启窗口等）：静默降级，绝不打扰用户任务
 					if (!silent) console.warn("[whale-panel] 拉取 /whale/inbox 失败:", err && err.message ? err.message : err);
@@ -551,7 +556,7 @@ window.__ModuleLoader__.load({
 					if (!j || j.ok !== true) throw new Error(j && j.error ? j.error : "响应异常");
 					solved = j;
 					applyState();
-					if (open === "solved") renderSolved();
+					if (open === "solved" || box.classList.contains("wh-open-solved")) renderSolved();
 				}, function (err) {
 					if (!silent) console.warn("[whale-panel] 拉取 /whale/solved 失败:", err && err.message ? err.message : err);
 				});

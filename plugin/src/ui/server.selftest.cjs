@@ -56,6 +56,10 @@ try {
   check('archive 生成当日文件', archives.length === 1 && /^archive-\d{8}\.md$/.test(archives[0]), archives);
   const arc = fs.readFileSync(path.join(nb, 'archive', archives[0]), 'utf8');
   check('archive 含原行+处置列', arc.indexOf('| C002 | stale-fs | 7 |') !== -1 && arc.indexOf('面板删除 2026-09-10 12:34') !== -1, arc);
+  // v0.7.3：归档行必须恰好 7 列——inbox 行尾的 `|` 不能再被续写成空列，处置列须落在末列
+  const arcRow = arc.split('\n').find((l) => l.indexOf('| C002 |') === 0) || '';
+  const arcCells = arcRow.split('|').slice(1, -1).map((s) => s.trim());
+  check('archive 行恰为 7 列且处置列在末列', arcCells.length === 7 && arcCells[6] === '面板删除 2026-09-10 12:34', arcCells);
   check('archive 其余候选未误入', arc.indexOf('C001') === -1 && arc.indexOf('C003') === -1, arc);
   check('detail 随删除归档', !fs.existsSync(path.join(nb, 'details', 'C002.md')) && fs.existsSync(path.join(nb, 'archive', 'details', 'C002.md')), fs.readdirSync(path.join(nb, 'archive')));
 

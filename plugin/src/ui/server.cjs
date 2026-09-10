@@ -124,8 +124,10 @@ function deleteCandidate({ id, now }) {
   if (line === null) return { ok: false, error: `inbox 中不存在候选 ${id}` };
   ensureArchiveDir();
   const stamp = localStamp(now || new Date());
-  // 归档行 = 候选原文 + 处置列（对齐 archive-*.md 的 7 列表头；archiveInboxRows 自补换行）
-  repo.archiveInboxRows(`${line.replace(/\r?$/, '')} | 面板删除 ${stamp}`);
+  // 归档行 = 候选原文（去掉行尾 `|`）+ 处置列，严格对齐 archive-*.md 的 7 列表头
+  // v0.7.3 修复：inbox 行本身以 `|` 结尾，旧写法直接续上 ` | 面板删除 …` → 表格多出一列、
+  // 处置列显示为空、时间戳被挤到第 8 列（与入库路径 commit.cjs 写出的 7 列行不一致）。
+  repo.archiveInboxRows(`${line.replace(/\s*\|?\s*$/, '')} | 面板删除 ${stamp} |`);
   const { removed } = repo.removeInboxRows([id]);
   if (removed !== 1) return { ok: false, error: `写入失败：${id} 未能从 inbox 移除` };
   return { ok: true, removed, id, archived: true };
