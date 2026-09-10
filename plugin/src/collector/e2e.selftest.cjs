@@ -189,6 +189,22 @@ try {
   check('水位线记录工作区与 callId 映射', !!wm && wm.ws === 'SandBox1' && !!wm.calls && wm.calls.c6 === 'pwsh', wm);
   check('聚簇索引有 cid 映射', Object.keys(state.clusters || {}).length >= 2 && Object.values(state.clusters).every((c) => /^C\d{3}$/.test(c.cid)), Object.keys(state.clusters || {}).length);
 
+  // ---- v0.6.1：--rebuild 从头梳理全部历史；--rebuild --add 一条命令扫完入箱 ----
+  fs.writeFileSync(path.join(nb, 'settings.json'), JSON.stringify({ autoCollect: true, autoAdd: false }), 'utf8');
+  const pendingBeforeRebuild = repo.pendingCount(repo.readInboxText());
+  const outRebuild = runScan('--rebuild');
+  // 注意：历史里「现象列与在箱候选相同」的聚簇会被认领为同一坑 → 走 bump 而不是进暂存，
+  // 所以断言取「暂存组数 + 并入条数」之和。
+  check('--rebuild 重新发现历史全部坑（暂存+并入，不写箱）',
+    outRebuild.data.rebuild === true && (outRebuild.data.deferredTotal + outRebuild.data.bumped.length) >= 4 &&
+    outRebuild.data.added.length === 0 && repo.pendingCount(repo.readInboxText()) === pendingBeforeRebuild, outRebuild.data);
+  check('--rebuild 后水位线重建到位', !!repo.readState().files[LOG] && repo.readState().files[LOG].offset === fs.statSync(LOG).size);
+  const outRebuildAdd = runScan('--rebuild', { add: true });
+  check('--rebuild --add 一条命令扫完直接入箱',
+    outRebuildAdd.data.rebuild === true && (outRebuildAdd.data.added.length + outRebuildAdd.data.bumped.length) >= 4 &&
+    repo.pendingCount(repo.readInboxText()) >= pendingBeforeRebuild, outRebuildAdd.data);
+  check('--rebuild 不清 nextCandidateId（编号不与归档冲突）', repo.readState().nextCandidateId > 1);
+
   // ---- --prewarm 明确提示会消费候选 ----
   const pw = runScan('--prewarm');
   check('prewarm 提示会消费候选', pw.ok === true && pw.text.indexOf('不会再作为候选出现') !== -1, pw.text);

@@ -394,8 +394,19 @@ function runScan(mode, opts) {
     bits.push(`${Date.now() - t0}ms`);
     return { ok: true, text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '), data: { added: out.added, bumped: out.bumped, dropped: out.dropped, remaining: out.remaining, pending: out.pending, dry: !!o.dry } };
   }
+  // v0.6 --rebuild：清空派生状态后从头梳理全部历史
+  // 语义：「第一次梳理」——水位线/指纹/聚簇/暂存全部清掉，历史里的每个坑都会被重新发现；
+  // 候选编号继续递增（nextCandidateId 保留），不会与 archive/ 里的历史编号冲突。
+  // 拉取式（autoAdd=false）下结果只进暂存，箱子不会被动增长；要入箱加 --add。
+  const rebuild = mode === '--rebuild';
+  if (rebuild) {
+    state.files = {};
+    state.clusters = {};
+    state.deferred = {};
+    state.seenFingerprints = [];
+  }
   // --stats/--prewarm 语义上是全量；settings.scanMode='full' 强制全量
-  const full = o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
+  const full = rebuild || o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
   const scan = scanHistory(state, settings, { full });
   const s = scan.stats;
   const scanLine = `解码 ${s.scanned}/${s.files} 文件（未更新跳过 ${s.skipped}）｜读取 ${(s.readBytes / 1048576).toFixed(2)}MB` +
@@ -433,12 +444,14 @@ function runScan(mode, opts) {
     };
   }
 
-  // 默认 --check：新事件按聚簇合并/复发后入箱（v0.6：autoAdd=false 时改为暂行，不写 inbox）
-  const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true });
+  // 默认 --check / --rebuild：新事件按聚簇合并/复发后入箱
+  // v0.6：autoAdd=false 且未显式 --add 时改为暂存（不写 inbox）
+  const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true, add: o.add === true });
   state.lastScan = Date.now();
   if (!o.dry) repo.writeState(state);
   const ms = Date.now() - t0;
   const bits = [];
+  if (rebuild) bits.push('rebuild：已清空水位线/指纹/聚簇/暂存，从头梳理全部历史');
   if (ing.deferredOn) {
     bits.push(`新发现暂存 ${ing.deferred.length} 组(${ing.deferred.map((r) => r.cat).join(',') || '无'})`);
     bits.push(`暂存共 ${ing.deferredTotal} 组（未入箱；说「小本本复盘」或跑 --add 才入箱）`);
@@ -458,7 +471,7 @@ function runScan(mode, opts) {
     data: {
       added: ing.added, bumped: ing.bumped, silent: ing.silent, dropped: ing.dropped,
       deferred: ing.deferred, deferredTotal: ing.deferredTotal, deferredOn: ing.deferredOn,
-      echo: ing.echo, echoEvents: ing.echoEvents,
+      echo: ing.echo, echoEvents: ing.echoEvents, rebuild,
       pending: ing.pending, ms, scan: s, dry: !!o.dry,
     },
   };
