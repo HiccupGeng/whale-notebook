@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-whale-notebook",
   "description": "鲸鱼闪闪发光的小本本: DSH 自我进化机制(模块化插件) — 采集会话问题/人工审核入库/AGENTS 自动段生效; 预留展示/对话框/桌宠扩展面",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

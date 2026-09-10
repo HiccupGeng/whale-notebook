@@ -21,6 +21,7 @@ const { INBOX_HEADER, inboxRow } = require('../core/schema.cjs');
 
 const DEFAULT_READD_COOLDOWN_DAYS = 7;
 const DEFAULT_MAX_FINGERPRINTS = 5000;
+const DEFAULT_MAX_DEFERRED = 200;
 const MAX_DETAIL_EVENTS = 16;
 const DETAIL_EXCERPT_MAX = 600;
 
@@ -114,6 +115,36 @@ function markSeen(state, events, cap) {
   return fresh;
 }
 
+// v0.6 拉取式：暂存摘要的合并与裁剪
+// 语义：settings.autoAdd=false 时，新发现只写进 state.deferred（不占待审箱、不发提醒清单），
+//       等用户主动说「小本本复盘」再 mine.cjs --add 一次性冲入待审箱审核。
+// 已存在且仍在待审箱里的候选不受影响：命中共聚簇时仍只累加次数（不新增行）。
+function deferCluster(def, a, now) {
+  const d = def[a.hash] || { cat: a.cat, text: a.text, n: 0, first: a.first, last: a.last, ws: [], refs: [], excerpt: '', at: now };
+  d.n += a.n;
+  if (a.first < d.first) d.first = a.first;
+  if (a.last > d.last) d.last = a.last;
+  for (const w of a.wsSet) if (w && d.ws.indexOf(w) === -1 && d.ws.length < 3) d.ws.push(w);
+  const best = a.evs.reduce((x, y) => (!x || y.text.length > x.text.length ? y : x), null);
+  if (best && best.text && best.text.length > (d.excerpt || '').length) d.excerpt = best.text.slice(0, DETAIL_EXCERPT_MAX);
+  for (const ev of a.evs) {
+    if (d.refs.length >= 3) break;
+    if (d.refs.some((r) => r.sid === ev.sid)) continue;
+    d.refs.push({ sid: ev.sid, at: ev.at, ws: ev.ws, file: ev.file });
+  }
+  d.at = now;
+  def[a.hash] = d;
+  return d;
+}
+function trimDeferred(def, cap) {
+  const keys = Object.keys(def);
+  if (keys.length <= cap) return 0;
+  keys.sort((x, y) => (def[x].last || 0) - (def[y].last || 0));
+  const drop = keys.slice(0, keys.length - cap);
+  for (const k of drop) delete def[k];
+  return drop.length;
+}
+
 // 共享入库：指纹去重 → 聚簇合并/复发/新建 → 行与 sidecar 落盘（批扫与实时采集共用）
 // opts: { dry, now, maxNewRows }
 function ingestFresh(rawEvents, state, settings, opts) {
@@ -193,6 +224,10 @@ function ingestFresh(rawEvents, state, settings, opts) {
   }
 
   // ④ 落盘（dry 时整段跳过；行与 sidecar 一次写入）
+  // v0.6：deferredOn（autoAdd=false 且未显式 --add）时，新发现改为写暂存摘要，不新增待审行
+  const deferredOn = o.add !== true && settings.autoAdd === false;
+  const def = state.deferred || (state.deferred = {});
+  const deferredList = [];
   decisions.sort((x, y) => x.first - y.first);
   const added = [];
   const bumped = [];
@@ -202,10 +237,22 @@ function ingestFresh(rawEvents, state, settings, opts) {
   const newRowLines = [];
   let inboxText = inboxOld;
   for (const a of decisions) {
-    if (a.kind === 'bump' || a.kind === 'silent') {
+    if (a.kind === 'bump') {
       const c = clusters[a.hash] || {};
-      if (a.kind === 'bump') { countMap.set(a.cid, c.n || a.n); bumped.push({ id: a.cid, n: c.n || a.n, added: a.n }); }
-      else silent.push({ id: a.cid, added: a.n, n: c.n || a.n });
+      countMap.set(a.cid, c.n || a.n);
+      bumped.push({ id: a.cid, n: c.n || a.n, added: a.n });
+      if (!dry) repo.appendDetailNote(a.cid, recurrenceNote(a, c, now));
+      continue;
+    }
+    if (deferredOn) {
+      // 暂存（new / readd / silent 一视同仁：合并进摘要，等 --add 再入箱）
+      const d = deferCluster(def, a, now);
+      deferredList.push({ hash: a.hash, cat: a.cat, n: d.n, text: d.text });
+      continue;
+    }
+    if (a.kind === 'silent') {
+      const c = clusters[a.hash] || {};
+      silent.push({ id: a.cid, added: a.n, n: c.n || a.n });
       if (!dry) repo.appendDetailNote(a.cid, recurrenceNote(a, c, now));
       continue;
     }
@@ -228,6 +275,7 @@ function ingestFresh(rawEvents, state, settings, opts) {
       try { repo.writeDetail(id, buildDetailMd(cid, a)); } catch (err) { /* detail 写入失败仅告警 */ }
     }
   }
+  if (deferredOn) trimDeferred(def, Number.isFinite(settings.maxDeferred) ? settings.maxDeferred : DEFAULT_MAX_DEFERRED);
   if (countMap.size) inboxText = repo.bumpInboxRows(inboxText, countMap).text;
   if (newRowLines.length) {
     const header = inboxText.trim() ? '' : INBOX_HEADER + '\n';
@@ -246,7 +294,77 @@ function ingestFresh(rawEvents, state, settings, opts) {
   state.seenFingerprints = seenArr;
   state.clusters = clusters;
 
-  return { added, bumped, silent, dropped, echo: echo.size, echoEvents: [...echo.values()].reduce((a, e) => a + e.n, 0), pending: repo.pendingCount(inboxText), fresh: fresh.length, dry };
+  return {
+    added, bumped, silent, dropped, deferred: deferredList, deferredTotal: Object.keys(def).length, deferredOn,
+    echo: echo.size, echoEvents: [...echo.values()].reduce((a2, e) => a2 + e.n, 0),
+    pending: repo.pendingCount(inboxText), fresh: fresh.length, dry,
+  };
+}
+
+// v0.6：把暂存摘要冲入待审箱（用户说「小本本复盘」时执行；--add）
+// 已在箱中的同坑只累加次数；曾经处置过的标「复发（原 C0xx）」；其余为新候选。
+function flushDeferred(state, settings, opts) {
+  const o = opts || {};
+  const dry = o.dry === true;
+  const now = Number.isFinite(o.now) ? o.now : Date.now();
+  const maxNewRows = Number.isFinite(o.maxNewRows) ? o.maxNewRows : 30;
+  const def = state.deferred || (state.deferred = {});
+  const clusters = state.clusters || (state.clusters = {});
+  const inboxOld = repo.readInboxText();
+  const pendIds = repo.pendingIds(inboxOld);
+  const hashes = Object.keys(def).sort((x, y) => (def[x].first || 0) - (def[y].first || 0));
+  const added = [];
+  const bumped = [];
+  let dropped = 0;
+  const countMap = new Map();
+  const newRowLines = [];
+  let inboxText = inboxOld;
+  for (const h of hashes) {
+    const d = def[h];
+    const c = clusters[h];
+    if (c && pendIds.has(c.cid)) {
+      // 同坑候选已在待审箱 → 只累加，不新开行
+      c.n = (c.n || 0) + d.n;
+      c.last = Math.max(c.last || 0, d.last || 0);
+      countMap.set(c.cid, c.n);
+      bumped.push({ id: c.cid, n: c.n, added: d.n });
+      if (!dry) repo.appendDetailNote(c.cid, `## 复发记录\n\n- ${fmtTime(d.last)}｜暂存合并 +${d.n} 次（累计 ${c.n}）｜${escCell((d.ws || []).join(',')) || '?'}｜经 --add 并入本候选`);
+      delete def[h];
+      continue;
+    }
+    if (added.length >= maxNewRows) { dropped++; continue; } // 留在暂存里，下次 --add 再说
+    const cid = state.nextCandidateId++;
+    const id = 'C' + String(cid).padStart(3, '0');
+    const readd = !!(c && c.cid && !pendIds.has(c.cid));
+    const text = readd ? `复发（原 ${c.cid}）：${d.text}` : d.text;
+    newRowLines.push(inboxRow(cid, { cat: d.cat, n: d.n, wsSet: d.ws || [], text: text.slice(0, 120), time: fmtTime(d.first) }));
+    clusters[h] = {
+      cid: id, cat: d.cat, text: d.text, n: d.n, first: d.first, last: d.last,
+      reAddedAt: readd ? now : 0,
+      reAdds: readd ? (((c && c.reAdds) || 0) + 1) : 0,
+    };
+    pendIds.add(id);
+    added.push({ id, cat: d.cat, n: d.n, kind: readd ? 'readd' : 'new', text });
+    if (!dry) {
+      // 暂存只留了 ≤3 条源引用与最长摘录，sidecar 内容按同一协议重建
+      const evs = (d.refs || []).map((r) => ({ sid: r.sid, at: r.at, ws: r.ws, file: r.file, text: '' }));
+      if (evs.length && d.excerpt) evs[0].text = d.excerpt;
+      try {
+        repo.writeDetail(id, buildDetailMd(cid, {
+          cat: d.cat, n: d.n, wsSet: new Set(d.ws || []), text: d.text,
+          first: d.first, last: d.last, evs, origin: readd ? c.cid : null,
+        }));
+      } catch (err) { /* detail 写入失败仅告警 */ }
+    }
+    delete def[h];
+  }
+  if (countMap.size) inboxText = repo.bumpInboxRows(inboxText, countMap).text;
+  if (newRowLines.length) {
+    const header = inboxText.trim() ? '' : INBOX_HEADER + '\n';
+    inboxText = inboxText.trimEnd() + (inboxText.trim() ? '\n' : '') + header + newRowLines.join('\n') + '\n';
+  }
+  if (!dry && (countMap.size || newRowLines.length)) repo.writeInboxText(inboxText);
+  return { added, bumped, dropped, remaining: Object.keys(def).length, pending: repo.pendingCount(inboxText), dry };
 }
 
 function recurrenceNote(a, c, now) {
@@ -256,7 +374,7 @@ function recurrenceNote(a, c, now) {
   return `${head}\n\n- ${fmtTime(now)}｜本次 +${a.n} 次（累计 ${(c && c.n) || a.n}）｜${ws}｜${tag}${a.evs && a.evs[0] ? `｜最近来源 ${a.evs[a.evs.length - 1].sid}` : ''}`;
 }
 
-// mode: '--check'(默认) | '--prewarm' | '--stats'；opts: { full, dry }
+// mode: '--check'(默认) | '--add' | '--prewarm' | '--stats'；opts: { full, dry }
 function runScan(mode, opts) {
   const o = opts || {};
   const t0 = Date.now();
@@ -264,6 +382,18 @@ function runScan(mode, opts) {
   if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
   const settings = repo.readSettings();
   const state = repo.readState();
+  // v0.6 --add：只把暂存摘要冲入待审箱，不重新扫描（O(暂存数)，与历史大小无关）
+  if (mode === '--add') {
+    const out = flushDeferred(state, settings, { dry: o.dry });
+    if (!o.dry) repo.writeState(state);
+    const bits = [`入箱 ${out.added.length} 条(${out.added.map((r) => r.cat).join(',') || '无'})`];
+    if (out.bumped.length) bits.push(`并入已有候选 ${out.bumped.length} 条(${out.bumped.map((b) => b.id).join(',')})`);
+    if (out.dropped) bits.push(`超单轮上限留在暂存 ${out.dropped} 组`);
+    bits.push(`待审共 ${out.pending} 条`);
+    bits.push(`剩余暂存 ${out.remaining} 组`);
+    bits.push(`${Date.now() - t0}ms`);
+    return { ok: true, text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '), data: { added: out.added, bumped: out.bumped, dropped: out.dropped, remaining: out.remaining, pending: out.pending, dry: !!o.dry } };
+  }
   // --stats/--prewarm 语义上是全量；settings.scanMode='full' 强制全量
   const full = o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
   const scan = scanHistory(state, settings, { full });
@@ -283,7 +413,7 @@ function runScan(mode, opts) {
     }
     const lines = [];
     lines.push('== whale-notebook 全量统计（只读，不落盘）==');
-    lines.push(`工作区: ${findWorkspaceDirs(settings).length} | 事件(工具失败/特征+用户报障): ${scan.events.length} | 已记指纹: ${(state.seenFingerprints || []).length}`);
+    lines.push(`工作区: ${findWorkspaceDirs(settings).length} | 事件(工具失败/特征+用户报障): ${scan.events.length} | 已记指纹: ${(state.seenFingerprints || []).length} | 暂存: ${Object.keys(state.deferred || {}).length} 组`);
     lines.push(`扫描: ${scanLine}｜用时 ${Date.now() - t0}ms`);
     for (const [cat, c] of Object.entries(catCount).sort((a, b) => b[1].n - a[1].n)) {
       lines.push(`  ${cat}: ${c.n} 次 | 工作区: ${[...c.ws].slice(0, 3).join(', ')} | ${fmtTime(c.first)} ~ ${fmtTime(c.last)}`);
@@ -303,12 +433,18 @@ function runScan(mode, opts) {
     };
   }
 
-  // 默认 --check：新事件按聚簇合并/复发后入箱
+  // 默认 --check：新事件按聚簇合并/复发后入箱（v0.6：autoAdd=false 时改为暂行，不写 inbox）
   const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true });
   state.lastScan = Date.now();
   if (!o.dry) repo.writeState(state);
   const ms = Date.now() - t0;
-  const bits = [`新发现 ${ing.added.length} 条(${ing.added.map((r) => r.cat).join(',') || '无'})`];
+  const bits = [];
+  if (ing.deferredOn) {
+    bits.push(`新发现暂存 ${ing.deferred.length} 组(${ing.deferred.map((r) => r.cat).join(',') || '无'})`);
+    bits.push(`暂存共 ${ing.deferredTotal} 组（未入箱；说「小本本复盘」或跑 --add 才入箱）`);
+  } else {
+    bits.push(`新发现 ${ing.added.length} 条(${ing.added.map((r) => r.cat).join(',') || '无'})`);
+  }
   if (ing.bumped.length) bits.push(`累加已有候选 ${ing.bumped.length} 条(${ing.bumped.map((b) => b.id).join(',')})`);
   if (ing.silent.length) bits.push(`复发冷却静默 ${ing.silent.length} 条`);
   if (ing.dropped) bits.push(`超单轮上限丢弃 ${ing.dropped} 条(已记指纹)`);
@@ -321,6 +457,7 @@ function runScan(mode, opts) {
     text: (o.dry ? '[dry 只读] ' : '') + bits.join(' | '),
     data: {
       added: ing.added, bumped: ing.bumped, silent: ing.silent, dropped: ing.dropped,
+      deferred: ing.deferred, deferredTotal: ing.deferredTotal, deferredOn: ing.deferredOn,
       echo: ing.echo, echoEvents: ing.echoEvents,
       pending: ing.pending, ms, scan: s, dry: !!o.dry,
     },
@@ -362,5 +499,5 @@ function buildDetailMd(cid, r) {
 }
 
 module.exports = {
-  runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, buildDetailMd,
+  runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
 };

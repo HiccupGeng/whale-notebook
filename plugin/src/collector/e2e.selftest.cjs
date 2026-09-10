@@ -146,6 +146,42 @@ try {
   const outReal = runScan('--check');
   check('弱特征单命中不误伤真实故障（仍入箱）', outReal.data.added.length === 1 && outReal.data.added[0].cat === 'error' && outReal.data.echo === 0, outReal.data);
 
+  // ---- v0.6 拉取式（autoAdd=false）：只暂存不写 inbox，--add 才入箱 ----
+  fs.writeFileSync(path.join(nb, 'settings.json'), JSON.stringify({ autoCollect: true, autoAdd: false, maxDeferred: 200 }), 'utf8');
+  const pendingBeforeDefer = repo.pendingCount(repo.readInboxText());
+  const inboxBeforeDefer = repo.readInboxText();
+  append([callRec('cd1', 'pwsh', T0 + 420e3), resultRec('cd1', 'ENOENT: 部署脚本找不到 config.json', true, T0 + 420e3 + 1)]);
+  append([callRec('cd2', 'pwsh', T0 + 426e3), resultRec('cd2', 'EADDRINUSE: 端口 3080 已被占用', true, T0 + 426e3 + 1)]);
+  const outDefer = runScan('--check');
+  check('拉取式：--check 不写待审箱', outDefer.data.deferredOn === true && outDefer.data.added.length === 0 && outDefer.data.deferred.length === 2 && repo.readInboxText() === inboxBeforeDefer, outDefer.data);
+  check('拉取式：输出报「暂存」而非「新发现」', outDefer.text.indexOf('新发现暂存 2 组') !== -1 && outDefer.text.indexOf('未入箱') !== -1, outDefer.text);
+  const stDefer = repo.readState();
+  check('暂存摘要落 state.deferred（含组数与证据）', Object.keys(stDefer.deferred || {}).length === 2 && Object.values(stDefer.deferred).every((d) => d.n >= 1 && d.refs.length >= 1 && typeof d.excerpt === 'string'), Object.keys(stDefer.deferred || {}));
+  check('拉取式仍推进水位线与指纹', !!stDefer.files[LOG] && stDefer.files[LOG].offset === fs.statSync(LOG).size && stDefer.seenFingerprints.length > 0, stDefer.files[LOG]);
+
+  // 再出现一次同样的坑 → 仍只累加暂存，不新增组
+  append([callRec('cd3', 'pwsh', T0 + 432e3), resultRec('cd3', 'EADDRINUSE: 端口 3080 已被占用', true, T0 + 432e3 + 1)]);
+  const outDefer2 = runScan('--check');
+  check('同坑复发只累加暂存（组数不变）', outDefer2.data.deferred.length === 1 && outDefer2.data.deferred[0].n === 2 && Object.keys(repo.readState().deferred).length === 2, outDefer2.data);
+
+  // --add：冲入待审箱（含 sidecar 重建与暂存清空）
+  const outAdd = runScan('--add');
+  check('--add 入箱 2 条', outAdd.data.added.length === 2 && outAdd.data.remaining === 0 && outAdd.data.pending === pendingBeforeDefer + 2, outAdd.data);
+  check('--add 后暂存清空', Object.keys(repo.readState().deferred || {}).length === 0);
+  check('--add 生成候选行与 sidecar', !!rowOf(outAdd.data.added[0].id) && fs.existsSync(path.join(nb, 'details', outAdd.data.added[0].id + '.md')), outAdd.data);
+  check('--add 的 sidecar 含源引用与摘录', (repo.readDetail(outAdd.data.added[0].id) || '').indexOf('session.jsonl.zstd') !== -1, (repo.readDetail(outAdd.data.added[0].id) || '').slice(0, 200));
+  const outAdd2 = runScan('--add');
+  check('--add 幂等（无暂存时入箱 0 条）', outAdd2.data.added.length === 0 && outAdd2.data.remaining === 0, outAdd2.data);
+
+  // 拉取式下，已入箱候选再次出现 → 只累加次数，不新增行
+  const pendingAfterAdd = repo.pendingCount(repo.readInboxText());
+  append([callRec('cd4', 'pwsh', T0 + 438e3), resultRec('cd4', 'EADDRINUSE: 端口 3080 已被占用', true, T0 + 438e3 + 1)]);
+  const outBump = runScan('--check');
+  check('拉取式下在箱候选只累加次数', outBump.data.bumped.length === 1 && outBump.data.deferred.length === 0 && repo.pendingCount(repo.readInboxText()) === pendingAfterAdd, outBump.data);
+
+  // 切回自动入箱（后续断言依赖 v0.5 行为）
+  fs.writeFileSync(path.join(nb, 'settings.json'), JSON.stringify({ autoCollect: true, autoAdd: true }), 'utf8');
+
   // ---- 水位线结构 ----
   const state = repo.readState();
   const wm = state.files[LOG];

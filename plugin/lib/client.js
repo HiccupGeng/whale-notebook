@@ -301,6 +301,7 @@ window.__ModuleLoader__.load({
 
 			var rows = [];
 			var pending = 0;
+			var deferred = 0;    // v0.6：拉取式——已暂存、尚未入箱的新发现条数（/whale/inbox 附带）
 			var solved = null;   // v0.4：已解决墙数据（/whale/solved 聚合）
 			var open = null;     // null | 'inbox' | 'solved'
 			var timer = null;
@@ -402,7 +403,10 @@ window.__ModuleLoader__.load({
 			function renderRows() {
 				list.textContent = "";
 				if (rows.length === 0) {
-					list.appendChild(el("div", "wh-empty", "（暂无可审核候选）"));
+					// v0.6：拉取式（autoAdd=false）下待审箱可能为空但仍有暂存发现——要说清楚怎么取
+					list.appendChild(el("div", "wh-empty", deferred > 0
+						? "（暂无待审候选；已暂存 " + deferred + " 条新发现——回复「小本本复盘」入箱后审核）"
+						: "（暂无可审核候选）"));
 					return;
 				}
 				for (var i = 0; i < rows.length; i++) {
@@ -442,7 +446,7 @@ window.__ModuleLoader__.load({
 
 			// v0.4：已解决墙状态机（无待审且无已解决 → 整面板隐藏，保持「不打扰」）
 			function applyState() {
-				var showA = pending > 0;
+				var showA = pending > 0 || deferred > 0;   // v0.6：仅有暂存发现时也保留入口（面板不躲起来）
 				var showB = !!(solved && solved.stats && solved.stats.active > 0);
 				if (!showA && !showB) {
 					box.style.display = "none";
@@ -453,8 +457,9 @@ window.__ModuleLoader__.load({
 				box.style.display = "";
 				tabA.style.display = showA ? "" : "none";
 				if (showA) {
-					badge.textContent = pending > 99 ? "99+" : String(pending);
-					headTitle.textContent = "🐳 待审箱 · " + pending;
+					var badgeN = pending > 0 ? pending : deferred;
+					badge.textContent = badgeN > 99 ? "99+" : String(badgeN);
+					headTitle.textContent = "🐳 待审箱 · " + pending + (deferred > 0 ? "（暂存 " + deferred + "）" : "");
 				}
 				tabB.style.display = showB ? "" : "none";
 				if (showB) {
@@ -490,6 +495,7 @@ window.__ModuleLoader__.load({
 					if (!j || j.ok !== true) throw new Error(j && j.error ? j.error : "响应异常");
 					rows = j.rows || [];
 					pending = j.pending || 0;
+					deferred = j.deferred || 0;
 					applyState();
 					if (open === "inbox") renderRows();
 				}, function (err) {

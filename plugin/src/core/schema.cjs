@@ -39,6 +39,9 @@ const SETTINGS_DEFAULTS = {
   reAddCooldownDays: 7,    // 已处置的坑复发时，冷却期内只静默计数、不重开候选
   reminderListMax: 3,      // 会话开始提醒：待审 ≤ 该值才逐条列编号清单，否则只报数字（省 token）
   maxFingerprints: 5000,   // seenFingerprints 上限，超出按插入序截尾（防无限增长）
+  // v0.6：拉取式（关掉自动入箱）
+  autoAdd: true,           // false = 扫描照常但新发现只暂存 state.deferred，不自动写入待审箱；mine.cjs --add 入箱
+  maxDeferred: 200,        // 暂存摘要上限（超出按最近出现时间保留最新的）
 };
 
 const AGENTS_MARK = {

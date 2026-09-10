@@ -38,4 +38,8 @@ for (const s of REQUIRED_V5) {
   if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.5 结构: ' + s);
 }
 if (!/var AUTO_VISIBLE = false/.test(code)) throw new Error('v0.5 约定：AUTO_VISIBLE 默认应为 false（⚡ 入口隐藏）');
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4 结构完整, v0.5 结构完整（⚡隐藏/双卡互跳/⟳增量扫描）');
+// v0.6 内容断言：拉取式——面板必须读取并展示 deferred（暂存数）与取用提示
+for (const s of ['deferred', '已暂存', '小本本复盘']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.6 结构: ' + s);
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4/v0.5/v0.6 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示）');

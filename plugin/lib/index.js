@@ -1,4 +1,4 @@
-// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.5：实时采集 + 决策箱面板 API）
+// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.6：实时采集 + 决策箱面板 API + 拉取式暂存）
 // 浏览器半边见 ./client.js（panel bundle，经 package.json dsh.client 声明由 client-modules 收录）。
 // host half 职责：
 //   ① 实时采集：订阅 DSH 会话事件总线 `session/event`，把「工具失败/特征」当场判出入待审箱
@@ -157,6 +157,8 @@ export function apply(ctx) {
           added: out.data.added.length,
           bumped: out.data.bumped.length,
           pending: out.data.pending,
+          deferredTotal: out.data.deferredTotal || 0,
+          deferredOn: out.data.deferredOn === true,
           ms: out.data.ms,
           scan: out.data.scan,
           text: out.text,

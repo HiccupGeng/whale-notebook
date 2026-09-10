@@ -21,9 +21,11 @@ function ensureArchiveDir() {
 }
 
 // GET /whale/inbox 数据：rows 形状与 viewmodel 一致（现象列已打码）
+// v0.6：附带 deferred（拉取式下已暂存、尚未入箱的新发现组数），面板据此提示「回复小本本复盘入箱」
 function listPayload() {
   const vm = inboxViewModel();
-  return { ok: true, pending: vm.pending, rows: vm.rows };
+  const state = repo.readState();
+  return { ok: true, pending: vm.pending, rows: vm.rows, deferred: Object.keys(state.deferred || {}).length };
 }
 
 // v0.4 GET /whale/solved：已解决墙聚合（轻口径：入库 = 已处理；只读 entries frontmatter）

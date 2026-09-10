@@ -1,6 +1,8 @@
 // collector/cli.cjs - 采集 CLI（供 scripts/mine.cjs 兼容壳与宿主插件复用）
-// 用法：node scripts/mine.cjs [--check|--stats|--prewarm] [--full] [--dry]
-//   --check    增量扫描并入箱（默认；未更新的会话日志只 stat 跳过）
+// 用法：node scripts/mine.cjs [--check|--add|--stats|--prewarm] [--full] [--dry]
+//   --check    增量扫描（默认；未更新的会话日志只 stat 跳过）
+//               autoAdd=true 时直接入箱；autoAdd=false（v0.6 拉取式）时只暂存 state.deferred
+//   --add      把暂存摘要冲入待审箱（用户说「小本本复盘」时执行）；不重新扫描
 //   --full     忽略水位线，全量重扫（只读全历史；用于排障/校验）
 //   --dry      只报结果不落盘（含不写 state）
 //   --stats    全量统计，纯只读（v0.5 起不再写 state —— 旧版会静默吞掉候选）
@@ -11,7 +13,7 @@ const { runScan } = require('./engine.cjs');
 const { listEntries } = repo;
 const agents = require('../inject/agents.cjs');
 
-const MODES = ['--check', '--stats', '--prewarm'];
+const MODES = ['--check', '--add', '--stats', '--prewarm'];
 
 function run(argv) {
   const args = Array.isArray(argv) ? argv : [];

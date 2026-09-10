@@ -30,7 +30,7 @@ function createLiveCollector(opts) {
   let timer = null;
   let disposed = false;
   let chain = Promise.resolve(); // 写盘串行化
-  const stats = { events: 0, flushes: 0, added: 0, bumped: 0, silent: 0, dropped: 0, echoGroups: 0, echoEvents: 0, skipped: 0, lastFlushAt: 0, lastError: null };
+  const stats = { events: 0, flushes: 0, added: 0, bumped: 0, silent: 0, dropped: 0, echoGroups: 0, echoEvents: 0, deferredGroups: 0, deferredEvents: 0, skipped: 0, lastFlushAt: 0, lastError: null };
 
   function ctxOf(session) {
     const sid = String((session && session.id) || '?');
@@ -82,8 +82,13 @@ function createLiveCollector(opts) {
         stats.dropped += ing.dropped || 0;
         stats.echoGroups += ing.echo || 0;
         stats.echoEvents += ing.echoEvents || 0;
+        stats.deferredGroups += (ing.deferred || []).length;
+        stats.deferredEvents += (ing.deferred || []).reduce((n, d) => n + d.n, 0);
         if (ing.added.length) {
           log.info(`[whale-notebook] 实时入箱 +${ing.added.length} 条（${ing.added.map((a) => a.id).join(',')}）｜待审共 ${ing.pending}`);
+        } else if (ing.deferredOn && (ing.deferred || []).length) {
+          // v0.6 拉取式：只暂存，不写待审箱（用户「小本本复盘」时才入箱）
+          log.debug(`[whale-notebook] 实时暂存 +${ing.deferred.length} 组（暂存共 ${ing.deferredTotal} 组，未入箱）`);
         } else if (ing.bumped.length) {
           log.debug(`[whale-notebook] 实时累加 ${ing.bumped.map((b) => b.id).join(',')}`);
         }

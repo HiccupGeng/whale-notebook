@@ -1,6 +1,6 @@
-# dsh-whale-notebook 插件包（v0.5.0：增量采集 + 实时入库 · 决策箱双卡 = 待审箱 + 已解决墙）
+# dsh-whale-notebook 插件包（v0.6.0：拉取式采集 · 增量水位线 · 决策箱双卡 = 待审箱 + 已解决墙）
 
-鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。
+鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。
 
 ## 模块地图
 
@@ -64,6 +64,8 @@ v0.5 语义要点：**增量采集**——`state.json` v2 记每个会话日志�
 
 v0.5.1 补充：**自引用/探针回声过滤**——`SELF_REF`/`ENC_DIAG_RE` 原先只作用于成功结果，`error` 类绕过，导致「维修采集器自身」的失败与探针输出全部进箱。新增 `scanner.isMetaEcho()` 两级签名（STRONG 单条命中即判；WEAK 需 ≥2 条同时命中，避免误伤真实故障文本），命中者标 `meta=true` 后由 engine **落档 `archive/echo-<日期>.md` 再排除**（不静默丢弃），扫描输出报「自引用回声过滤 N 组/M 条」，`GET /whale/live` 同步计数。效果：同一份真实历史新候选 **26 → 2**（留下的是真的沙箱拒绝坑）。
 
+v0.6 语义要点：**拉取式（pull）**——`settings.autoAdd=false` 时，`--check` 照常增量扫描并推进水位线/指纹（8ms、0 token），但新发现不写 `inbox.md`，而是合并进 `state.json` 的 `deferred` 摘要（`{cat,text,n,first,last,ws[],refs[],excerpt}`，上限 `maxDeferred`）；用户主动说「小本本复盘 / 待审核箱」时才 `mine.cjs --add` 把暂存冲入待审箱（重建候选行 + `details/C###.md`，曾经处置过的标「复发（原 C0xx）」）。**已在待审箱里的候选不受影响**：命中共聚簇时仍只累加次数（不新增行）。**提醒句随开关二选一**（`agents.cjs`：注入文本必须与实际行为一致）：拉取式下只报一行「新发现 N 组已暂存（未入箱）」，不展开清单、不询问审核，比自动模式更省 token。**面板**：`GET /whale/inbox` 附带 `deferred` 组数，仅有暂存时候选入口不隐藏，卡片提示「回复『小本本复盘』入箱后审核」。实时采集（`liveCapture`）同样遵守 `autoAdd`：关掉也只暂存、不写箱。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md` §4.7。
+
 ```powershell
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --apply    # 复制包 + patch ~/.dsh/profiles/web/cordis.patch.yml
@@ -73,7 +75,7 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply
 
 - **生效差异（v0.5 起）**：浏览器半边 `lib/client.js` 改动**只需刷新页面**（loader 每请求现读磁盘 + `no-cache`）；宿主半边 `lib/index.js`/`src/**` 改动（实时采集、新端点）**需重启 dsh web**（会中断在线会话，时机由用户定）；`mine.cjs` 增量批扫不依赖重启，立即可用。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可。
-- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 45 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|e2e|live.selftest.cjs`（engine 10 + zstd 全链 40 + 实时 19 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4/v0.5 结构断言）——共 6 套件 **134 断言** + bundle 桩，全绿（2026-09-10 v0.5.1）。
+- 验证：`node src/ui/server.selftest.cjs`（host 逻辑 45 断言）、`node src/core/privacy|summarize.selftest.cjs`、`node src/collector/engine|e2e|live.selftest.cjs`（engine 10 + zstd 全链 51 + 实时 19 断言）、`node scripts/bundle-smoke.cjs`（bundle 桩，含 v0.4/v0.5/v0.6 结构断言）——共 6 套件 **145 断言** + bundle 桩，全绿（2026-09-10 v0.6.0）。
 
 ### 风险与前提（务必先读）
 

@@ -41,14 +41,18 @@ function readSettings() { return readJson(P.settings, {}); }
 //   files    : { "<会话日志绝对路径>": { size, mtimeMs, offset, frames, sid, ws } } ← 增量水位线
 //   clusters : { "<聚簇哈希>": { cid, cat, text, n, first, last, reAddedAt, reAdds } } ← 跨轮次同坑合并
 //   seenFingerprints：事件级指纹（防重读同一字节；按 maxFingerprints 截尾，不再无限增长）
+// v0.6 追加：
+//   deferred : { "<聚簇哈希>": { cat, text, n, first, last, ws[], refs[], excerpt, at } } ← 拉取式暂存摘要
+//              （settings.autoAdd=false 时新发现只进这里，不写 inbox；mine.cjs --add 才入箱）
 const STATE_VERSION = 2;
-function emptyState() { return { v: STATE_VERSION, lastScan: 0, seenFingerprints: [], nextCandidateId: 1, files: {}, clusters: {} }; }
+function emptyState() { return { v: STATE_VERSION, lastScan: 0, seenFingerprints: [], nextCandidateId: 1, files: {}, clusters: {}, deferred: {} }; }
 function normalizeState(s) {
   const out = (s && typeof s === 'object') ? s : {};
   if (!Array.isArray(out.seenFingerprints)) out.seenFingerprints = [];
   if (!Number.isFinite(out.nextCandidateId) || out.nextCandidateId < 1) out.nextCandidateId = 1;
   if (!out.files || typeof out.files !== 'object') out.files = {};
   if (!out.clusters || typeof out.clusters !== 'object') out.clusters = {};
+  if (!out.deferred || typeof out.deferred !== 'object') out.deferred = {};
   if (!Number.isFinite(out.lastScan)) out.lastScan = 0;
   out.v = STATE_VERSION;
   return out;
