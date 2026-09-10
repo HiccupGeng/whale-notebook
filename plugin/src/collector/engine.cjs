@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const repo = require('../store/repo.cjs');
 const { redactLines, hash36, canonText } = require('../core/privacy.cjs');
+const { bestFamily, DEFAULT_THRESHOLDS } = require('../core/similarity.cjs');
 const { fmtTime } = require('../core/util.cjs');
 const { oneLiner } = require('../core/summarize.cjs');
 const { PAT_IDS } = require('./patterns.cjs');
@@ -100,6 +101,31 @@ function pruneResolvedIndex(state, index) {
     if (sig && index.has(sig)) { index.delete(sig); pruned++; }
   }
   return pruned;
+}
+
+// v0.7：族（family）——同一坑的不同变体（IP/端口/耗时不同、详略不同）。
+// 复用既有结构：state.clusters 里 **cid 相同的聚簇天然就是一族**（族合并时新变体的 cid 指向代表聚簇的行），
+// 因此不需要新增状态字段；familyList() 只是把聚簇投影成相似度比对用的 { key, cat, repr } 列表。
+function familyThresholds(settings) {
+  const s = (settings && settings.familyThresholdSame);
+  const c = (settings && settings.familyThresholdCross);
+  return {
+    same: Number.isFinite(s) ? s : DEFAULT_THRESHOLDS.same,
+    cross: Number.isFinite(c) ? c : DEFAULT_THRESHOLDS.cross,
+  };
+}
+function familyList(clusters) {
+  const out = [];
+  for (const h of Object.keys(clusters || {})) {
+    const c = clusters[h];
+    if (!c || !c.text) continue;
+    out.push({ key: h, cat: c.cat, repr: c.text, cid: c.cid, n: c.n, first: c.first, last: c.last });
+  }
+  return out;
+}
+// 族并入的记录（写进代表候选的 detail sidecar：讨论会话据此看到「这条其实是 N 个变体」）
+function familyNote(a, rep, now) {
+  return `## 同族并入（v0.7）\n\n- ${fmtTime(now)}｜相似度 ${a.familyScore}｜本次 +${a.n} 次（族累计 ${(rep && rep.n) || a.n}）｜${escCell([...a.wsSet].slice(0, 2).join(',')) || '?'}\n- 变体现象：${escCell(a.text)}\n- 判定依据：与代表现象「${escCell((rep && rep.text) || '')}」的骨架相似度 ≥ 阈值（阈值可调 settings.familyThresholdSame/Cross）`;
 }
 
 function findWorkspaceDirs(settings) {
@@ -290,6 +316,33 @@ function ingestFresh(rawEvents, state, settings, opts) {
       };
       a.kind = 'resolved'; decisions.push(a); continue;
     }
+    // v0.7：族匹配 —— 与某个已登记的族相似（同一坑的不同变体）时，并入该族已有的候选行，
+    // 而不是新开一行；该族若已被判为「已处置」，这里同样压掉（与 v0.6.2 的文本级守卫同义，但按族生效）。
+    const fam = bestFamily(a.text, a.cat, familyList(clusters), familyThresholds(settings));
+    if (fam) {
+      const fc = clusters[fam.key] || {};
+      const entry = {
+        cid: fc.cid == null ? null : fc.cid, cat: a.cat, text: a.text, n: a.n, first: a.first, last: a.last,
+        reAddedAt: 0, reAdds: 0, family: fam.key, familyScore: fam.score,
+      };
+      if (fc.cid === null) { // 族已处置 → 压掉
+        entry.reAddedAt = now; entry.silentN = a.n;
+        clusters[a.hash] = entry;
+        a.kind = 'resolved'; decisions.push(a); continue;
+      }
+      if (pendIds.has(fc.cid)) { // 族已有在箱候选 → 并入（族合并的核心收益）
+        fc.n = (fc.n || 0) + a.n;
+        fc.last = Math.max(fc.last || 0, a.last);
+        clusters[a.hash] = entry;
+        a.cid = fc.cid; a.kind = 'family'; a.familyKey = fam.key; a.familyScore = fam.score;
+        decisions.push(a); continue;
+      }
+      // 族曾开行、后被处置 → 复发重开（新行成为该族新的代表）
+      entry.n = (fc.n || 0) + a.n;
+      clusters[a.hash] = entry;
+      a.origin = fc.cid; a.kind = 'readd'; a.familyKey = fam.key; a.familyScore = fam.score;
+      decisions.push(a); continue;
+    }
     const adopted = adoptBy.get(a.cat + '|' + a.text);
     if (adopted) {
       clusters[a.hash] = { cid: adopted, cat: a.cat, text: a.text, n: a.n, first: a.first, last: a.last, reAddedAt: 0, reAdds: 0 };
@@ -324,6 +377,15 @@ function ingestFresh(rawEvents, state, settings, opts) {
       // 暂存（new / readd / silent 一视同仁：合并进摘要，等 --add 再入箱）
       const d = deferCluster(def, a, now);
       deferredList.push({ hash: a.hash, cat: a.cat, n: d.n, text: d.text });
+      continue;
+    }
+    if (a.kind === 'family') {
+      // v0.7：并入同族已有的候选行 —— 只累加代表聚簇的次数，并在该行 sidecar 记下变体现象
+      const rep = clusters[a.familyKey] || {};
+      const total = rep.n || a.n;
+      countMap.set(a.cid, total);
+      bumped.push({ id: a.cid, n: total, added: a.n, family: a.familyKey, score: a.familyScore });
+      if (!dry) repo.appendDetailNote(a.cid, familyNote(a, rep, now));
       continue;
     }
     if (a.kind === 'resolved') {
@@ -415,8 +477,37 @@ function flushDeferred(state, settings, opts) {
       continue;
     }
     if (added.length >= maxNewRows) { dropped++; continue; } // 留在暂存里，下次 --add 再说
-    // v0.6.2：该内容已在归档里被处置过 → 不入箱（重置后重扫产生的暂存组由此被压掉）
     const dText = d.text || (c && c.text) || '';
+    // v0.7：先按族合并 —— 同族已有在箱候选就并进去；该族已处置则压掉（与文本级守卫同义但按族生效）
+    let famOrigin = null;
+    const fam = bestFamily(dText, d.cat, familyList(clusters), familyThresholds(settings));
+    if (fam) {
+      const fc = clusters[fam.key] || {};
+      if (fc.cid === null) {
+        suppressed.push({ cat: d.cat, n: d.n, text: dText });
+        clusters[h] = {
+          cid: null, cat: d.cat, text: dText, n: ((c && c.n) || 0) + d.n, first: d.first, last: d.last,
+          reAddedAt: now, reAdds: 0, silentN: ((c && c.silentN) || 0) + d.n, family: fam.key, familyScore: fam.score,
+        };
+        delete def[h];
+        continue;
+      }
+      if (pendIds.has(fc.cid)) {
+        fc.n = (fc.n || 0) + d.n;
+        fc.last = Math.max(fc.last || 0, d.last || 0);
+        countMap.set(fc.cid, fc.n);
+        bumped.push({ id: fc.cid, n: fc.n, added: d.n, family: fam.key, score: fam.score });
+        clusters[h] = {
+          cid: fc.cid, cat: d.cat, text: dText, n: d.n, first: d.first, last: d.last,
+          reAddedAt: 0, reAdds: 0, family: fam.key, familyScore: fam.score,
+        };
+        if (!dry) repo.appendDetailNote(fc.cid, `## 同族并入（v0.7）\n\n- ${fmtTime(d.last)}｜相似度 ${fam.score}｜暂存合并 +${d.n} 次（族累计 ${fc.n}）｜${escCell((d.ws || []).join(',')) || '?'}｜经 --add 并入本候选\n- 变体现象：${escCell(dText)}`);
+        delete def[h];
+        continue;
+      }
+      famOrigin = fc.cid; // 族曾开行后被处置 → 复发重开
+    }
+    // v0.6.2：该内容已在归档里被处置过 → 不入箱（重置后重扫产生的暂存组由此被压掉）
     if (resolved.has(resolvedSig(d.cat, dText))) {
       suppressed.push({ cat: d.cat, n: d.n, text: dText });
       clusters[h] = {
@@ -428,13 +519,15 @@ function flushDeferred(state, settings, opts) {
     }
     const cid = state.nextCandidateId++;
     const id = 'C' + String(cid).padStart(3, '0');
-    const readd = !!(c && c.cid && !pendIds.has(c.cid));
-    const text = readd ? `复发（原 ${c.cid}）：${d.text}` : d.text;
+    const readd = !!(famOrigin || (c && c.cid && !pendIds.has(c.cid)));
+    const origin = famOrigin || (c && c.cid) || null;
+    const text = readd ? `复发（原 ${origin}）：${d.text}` : d.text;
     newRowLines.push(inboxRow(cid, { cat: d.cat, n: d.n, wsSet: d.ws || [], text: text.slice(0, 120), time: fmtTime(d.first) }));
     clusters[h] = {
       cid: id, cat: d.cat, text: d.text, n: d.n, first: d.first, last: d.last,
       reAddedAt: readd ? now : 0,
       reAdds: readd ? (((c && c.reAdds) || 0) + 1) : 0,
+      family: (fam && fam.key) || null, familyScore: (fam && fam.score) || null,
     };
     pendIds.add(id);
     added.push({ id, cat: d.cat, n: d.n, kind: readd ? 'readd' : 'new', text });
@@ -445,7 +538,7 @@ function flushDeferred(state, settings, opts) {
       try {
         repo.writeDetail(id, buildDetailMd(cid, {
           cat: d.cat, n: d.n, wsSet: new Set(d.ws || []), text: d.text,
-          first: d.first, last: d.last, evs, origin: readd ? c.cid : null,
+          first: d.first, last: d.last, evs, origin: readd ? origin : null,
         }));
       } catch (err) { /* detail 写入失败仅告警 */ }
     }
@@ -480,7 +573,10 @@ function runScan(mode, opts) {
     const out = flushDeferred(state, settings, { dry: o.dry, resolved: loadResolvedIndex() });
     if (!o.dry) repo.writeState(state);
     const bits = [`入箱 ${out.added.length} 条(${out.added.map((r) => r.cat).join(',') || '无'})`];
-    if (out.bumped.length) bits.push(`并入已有候选 ${out.bumped.length} 条(${out.bumped.map((b) => b.id).join(',')})`);
+    if (out.bumped.length) {
+      const famN = out.bumped.filter((b) => b.family).length;
+      bits.push(`并入已有候选 ${out.bumped.length} 条(${out.bumped.map((b) => b.id).join(',')}${famN ? `，其中同族 ${famN} 条` : ''})`);
+    }
     if (out.suppressed.length) bits.push(`已处置签名压掉暂存重复 ${out.suppressed.length} 组(不再开行)`);
     if (out.dropped) bits.push(`超单轮上限留在暂存 ${out.dropped} 组`);
     bits.push(`待审共 ${out.pending} 条`);
@@ -556,7 +652,10 @@ function runScan(mode, opts) {
   } else {
     bits.push(`新发现 ${ing.added.length} 条(${ing.added.map((r) => r.cat).join(',') || '无'})`);
   }
-  if (ing.bumped.length) bits.push(`累加已有候选 ${ing.bumped.length} 条(${ing.bumped.map((b) => b.id).join(',')})`);
+  if (ing.bumped.length) {
+    const famN = ing.bumped.filter((b) => b.family).length;
+    bits.push(`累加已有候选 ${ing.bumped.length} 条(${ing.bumped.map((b) => b.id).join(',')}${famN ? `，其中同族并入 ${famN} 条` : ''})`);
+  }
   if (ing.silent.length) bits.push(`复发冷却静默 ${ing.silent.length} 条`);
   if (ing.suppressed.length) bits.push(`已处置签名压掉重复候选 ${ing.suppressed.length} 条(重置后重扫不再重复开行)`);
   if (ing.dropped) bits.push(`超单轮上限丢弃 ${ing.dropped} 条(已记指纹)`);
@@ -614,4 +713,6 @@ module.exports = {
   runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
   // v0.6.2：已处置签名索引（防重置后重扫重复开行）
   resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
+  // v0.7：族（同坑不同变体）—— 复用 state.clusters（同 cid 即同族）
+  familyList, familyThresholds, familyNote,
 };

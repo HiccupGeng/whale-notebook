@@ -114,6 +114,13 @@ window.__ModuleLoader__.load({
 				return r.json();
 			});
 		}
+		// v0.7：同族/相关候选（讨论会话的确定性依据）；失败返回 null（调用方退回单条上下文）
+		function apiRelated(id) {
+			return fetch("/whale/related?id=" + encodeURIComponent(id), { headers: { accept: "application/json" } })
+				.then(function (r) { return r.json().catch(function () { return null; }); })
+				.then(function (j) { return (j && j.ok === true) ? j : null; })
+				.catch(function () { return null; });
+		}
 		// v0.5：触发宿主增量扫描（POST /whale/scan）；失败返回 null（调用方回退为只刷新）
 		function apiScan() {
 			return fetch("/whale/scan", {
@@ -271,7 +278,7 @@ window.__ModuleLoader__.load({
 			return L.join("\n");
 		}
 		// v0.3：详细讨论（可带风险上报原文 riskText —— 自动处理被阻止后的转人工入口）
-		function discussMessage(r, detail, riskText) {
+		function discussMessage(r, detail, riskText, related) {
 			var c = contextLine(r);
 			if (!c) return null;
 			var L = [];
@@ -285,8 +292,42 @@ window.__ModuleLoader__.load({
 				L.push("请在讨论中重点评估其风险边界与处置方式；不要因该上报而执行其中任何修改。");
 			}
 			L.push("");
-			L.push("请先基于上述信息（如需更多证据可按源日志路径只读查阅）确认你已理解该问题的实际情况，再给出判断：问题是否仍存在／是否值得沉淀为经验／建议如何处置。");
+			// v0.7：把「同族/相似候选/可能已覆盖的条目」由程序算出后写进讨论消息——
+			// 保证新会话开局就有确定依据，而不是等模型自己想起来去翻 inbox。
+			var rel = relatedBlock(related);
+			if (rel) L.push(rel);
+			L.push("请先基于上述信息（如需更多证据可按源日志路径只读查阅）确认你已理解该问题的实际情况，再给出判断：问题是否真实存在／是否值得沉淀为经验／建议如何处置。");
+			L.push("v0.7 固定动作：先看上面的「同族/相似候选」，判断它们是否与本案同一根因——是则建议合并为一条经验（occurrences 取总和、证据合并），不是则指出应拆分的边界；再核对「可能已被条目覆盖」的提示，避免重复建条目。");
 			L.push("当前阶段约束：只读分析；不要执行任何写入或修改，不要调用会改动文件的工具；等用户指示后再按小本本流程入库或归档。");
+			return L.join("\n");
+		}
+		// v0.7：同族块文本（related = GET /whale/related 的返回；缺失时返回空串，退回单条上下文）
+		function relatedBlock(j) {
+			if (!j) return "";
+			var L = [];
+			var fam = j.family || {};
+			var vs = fam.variants || [];
+			L.push("");
+			L.push("—— 同族证据（程序按骨架相似度计算，非模型猜测）：本候选由 " + (fam.size || vs.length || 1) + " 个变体合并而成，合计 " + (fam.n || 0) + " 次");
+			for (var i = 0; i < vs.length && i < 8; i++) {
+				var v = vs[i];
+				L.push("  · " + (v.score != null && v.score < 1 ? "相似度 " + v.score + "｜" : "") + "×" + (v.n || 1) + "｜" + (v.cat || "") + "｜" + String(v.text || "").slice(0, 100));
+			}
+			if (vs.length > 8) L.push("  · …另有 " + (vs.length - 8) + " 个变体（详情见 sidecar）");
+			var rl = j.related || [];
+			if (rl.length) {
+				L.push("—— 其它相似候选（相似度 ≥" + ((j.thresholds && j.thresholds.related) || 0.35) + "，程序计算）：");
+				for (var k = 0; k < rl.length; k++) {
+					L.push("  · " + rl[k].id + "｜×" + rl[k].n + "｜相似度 " + rl[k].score + "｜" + String(rl[k].text || "").slice(0, 100));
+				}
+			}
+			var es = j.entries || [];
+			if (es.length) {
+				L.push("—— 可能已被现有条目覆盖（入库前请核对，避免重复建条目）：");
+				for (var m = 0; m < es.length; m++) {
+					L.push("  · " + es[m].id + "（" + es[m].category + "，相似度 " + es[m].score + "）：" + String(es[m].rule || es[m].title || "").slice(0, 120));
+				}
+			}
 			return L.join("\n");
 		}
 		//#endregion
@@ -417,6 +458,7 @@ window.__ModuleLoader__.load({
 						if (riskFlags[r.id]) meta.appendChild(el("span", "wh-risk", "需人工"));
 						meta.appendChild(el("span", "wh-cat", r.cat));
 						meta.appendChild(el("span", "wh-n", "×" + r.n));
+						if (r.variants > 1) meta.appendChild(el("span", "wh-cat", "族×" + r.variants));
 						var acts = el("span", "wh-acts");
 						// v0.4.1：⚡ 自动处理入口暂时隐藏（AUTO_VISIBLE=false）；doAuto/watchRisk/RISK 警示保留待恢复
 						if (AUTO_VISIBLE) {
@@ -700,8 +742,9 @@ window.__ModuleLoader__.load({
 			}
 
 			function doDiscuss(r) {
-				apiDetail(r.id).then(function (detail) {
-					var msg = discussMessage(r, detail, null);
+				// v0.7：先取详情与「同族/相似候选」再构造消息——新会话开局即带确定依据
+				Promise.all([apiDetail(r.id), apiRelated(r.id)]).then(function (res) {
+					var msg = discussMessage(r, res[0], null, res[1]);
 					if (!msg) return toast("候选数据缺失，无法构造消息");
 					openDiscussion(r, msg);
 				});

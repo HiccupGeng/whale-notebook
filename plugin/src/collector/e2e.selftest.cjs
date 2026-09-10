@@ -189,6 +189,36 @@ try {
   check('水位线记录工作区与 callId 映射', !!wm && wm.ws === 'SandBox1' && !!wm.calls && wm.calls.c6 === 'pwsh', wm);
   check('聚簇索引有 cid 映射', Object.keys(state.clusters || {}).length >= 2 && Object.values(state.clusters).every((c) => /^C\d{3}$/.test(c.cid)), Object.keys(state.clusters || {}).length);
 
+  // ---- v0.7：同族合并（同一坑的不同变体并成一行）+ related 端点 ----
+  // 夹具要点：差异必须落在 canonText 的 90 字截断之内（否则是同一个精确聚簇，走 bump 而非族合并），
+  // 且差异部分要能被骨架归一化（这里用两个不同 IP）→ 骨架相同、相似度 1、精确聚簇不同。
+  const G1 = "fatal: unable to access 'https://github.com/a/b.git/': Failed to connect to 140.82.114.3 port 443";
+  const G2 = "fatal: unable to access 'https://github.com/a/b.git/': Failed to connect to 20.205.243.166 port 443";
+  const rowsBeforeFam = repo.pendingCount(repo.readInboxText());
+  append([callRec('cf1', 'pwsh', T0 + 480e3), resultRec('cf1', G1, true, T0 + 480e3 + 1)]);
+  const outFam1 = runScan('--check');
+  append([callRec('cf2', 'pwsh', T0 + 486e3), resultRec('cf2', G2, true, T0 + 486e3 + 1)]);
+  const outFam2 = runScan('--check');
+  const famId = outFam1.data.added[0] ? outFam1.data.added[0].id : null;
+  check('v0.7 同族合并：变体不新开行，累加到同一候选',
+    outFam1.data.added.length === 1 && outFam2.data.added.length === 0 && outFam2.data.bumped.length === 1 &&
+    repo.pendingCount(repo.readInboxText()) === rowsBeforeFam + 1, { a: outFam1.data, b: outFam2.data });
+  check('v0.7 族成员指向同一候选（state.clusters 同 cid ×2）',
+    !!famId && Object.values(repo.readState().clusters).filter((c) => c.cid === famId).length === 2,
+    famId ? Object.values(repo.readState().clusters).map((c) => c.cid) : null);
+  check('v0.7 同族并入记入 sidecar（讨论会话据此看到变体）',
+    !!famId && (repo.readDetail(famId) || '').indexOf('同族并入') !== -1, famId ? (repo.readDetail(famId) || '').slice(-240) : null);
+  const rel = require('../ui/server.cjs').relatedPayload(famId || 'C000');
+  check('v0.7 GET /whale/related：族大小/相似候选/覆盖条目三块齐备',
+    rel.ok === true && rel.family.size === 2 && rel.family.variants.length === 2 && Array.isArray(rel.related) && Array.isArray(rel.entries),
+    rel.ok ? { size: rel.family.size, rel: rel.related.length, ent: rel.entries.length } : rel);
+  check('v0.7 不误并：另一种坑仍单独开行', (() => {
+    const before = repo.pendingCount(repo.readInboxText());
+    append([callRec('cf3', 'pwsh', T0 + 492e3), resultRec('cf3', 'ENOSPC: no space left on device, write failed', true, T0 + 492e3 + 1)]);
+    const o = runScan('--check');
+    return o.data.added.length === 1 && repo.pendingCount(repo.readInboxText()) === before + 1;
+  })());
+
   // ---- v0.6.1：--rebuild 从头梳理全部历史；--rebuild --add 一条命令扫完入箱 ----
   fs.writeFileSync(path.join(nb, 'settings.json'), JSON.stringify({ autoCollect: true, autoAdd: false }), 'utf8');
   const pendingBeforeRebuild = repo.pendingCount(repo.readInboxText());

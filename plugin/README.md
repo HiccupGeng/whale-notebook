@@ -68,6 +68,15 @@ v0.6.2 补充（真实从零重扫三轮迭代而来）：① 回声签名扩充
 
 v0.6.3 补充：**已处置签名去重（防「重置后重扫」重复开行）**——实测同一个坑会因 `state.json` 被重置（或 `--rebuild` 重扫）而反复开新候选行：同一段会话日志在新状态下拿到**新指纹 + 新聚簇哈希**，而原候选已不在 inbox，于是被当成全新坑（本机同一行先后开出 3 个候选编号）。修法不再依赖易失的 state，而是把**归档表当事实源**：`engine.loadResolvedIndex()` 收集「已处置」（末列非空）的归档行 → `resolvedSig(cat, text)`（类别 + 空白归一后 90 单元截断）建签名索引，新聚簇命中签名即**压掉不开行**（写入 `clusters[hash] = {cid:null, silentN}`，扫描输出报「已处置签名压掉重复候选 N 条」）；`flushDeferred`（`--add`）同规则。两处坑：① 归档行历史上有两种渲染形态（早期 6 列无处置列 / 批量清理后追加列且**行内残留半角 `|`**），故放弃按列数解析，改为 `parseArchiveRow`「前 4 列固定 + 从右端切掉时间列与处置列」；② 时间列必须切掉，否则会混进现象文本导致签名永远对不上。在箱聚簇会被 `pruneResolvedIndex` 从索引剔除，保留既有**复发**语义（重开并标「复发（原 C0xx）」）。新增自测 `src/collector/engine.dedup.selftest.cjs`（19 断言，含端到端复现「重置后重扫」与反证用例）。
 
+v0.7.0 补充：**同族（family）确定化——「还有类似的问题可以一并处理」不再靠模型即兴归纳**。
+- 起因：面板 💬 把某条候选转新会话时，消息里只有**这一条**（`discussMessage` 只拼 `contextLine(r)` + 该条 sidecar），程序里唯一的「相似」是精确同文聚簇（`cat|tool|canonText` 全等），所以「还有类似」全是 LLM 自己翻 inbox 后的归纳——不可复现、可能漏、可能编。
+- 新增 `src/core/similarity.cjs`（纯函数）：`skeleton()` 剥掉易变部分（IP/端口/时间戳/行号/路径/字节数/会话 id/uuid），再做字符 3-gram + 包含度相似度；`bestFamily()` 按类别相容组选阈值（同类 0.6 / 跨类 0.8，`git-net|timeout|model-api` 视为 net，`error` 与任意类别相容）→ 判定**可复现、可解释、可调**（`settings.familyThresholdSame/Cross`）。
+- **L1 族合并**：族**复用既有 `state.clusters`**（同一 cid 的多个聚簇天然是一族，无需新增状态字段）。采集时未命中同文聚簇、但与某族相似 → **并入该族已有的候选行**（累加次数 + 把变体现象写进 sidecar 的「## 同族并入」段），而不是新开一行；该族若已被判为已处置则整族压掉（与 v0.6.3 的文本级守卫同义但按族生效）；族曾开行后被处置 → 仍走复发语义（标「复发（原 C0xx）」）。`--add`（`flushDeferred`）同规则。
+- **L2/L3 讨论会话拿确定依据**：新端点 `GET /whale/related?id=C###` 返回三块——`family`（族成员/变体/相似度）、`related`（其它在箱行相似度 ≥0.35）、`entries`（可能已被条目覆盖，相似度 ≥0.25 或同类别）；面板 💬 会先取它并把三块写进新会话消息（`relatedBlock`），消息末尾附固定动作「先看同族 → 判断是否同根因 → 是则合并为一条经验（occurrences 取总和）；再核对覆盖提示」。面板行带「族×N」小标（`listPayload.rows[].variants`）。
+- **L4 措辞固化**：技能「讨论」流程加为**第 0 步**（程序给依据；面板/端点不可用时退回读 inbox + `clusters` 同 cid 判族并写明判据），「入库」流程加同族合并口径（一条候选 = 一条经验，occurrences 取总和，对策覆盖全部变体）。
+- **边界（写进技能）**：同族 ≠ 一定同根因。程序保证「该看哪些」确定、可复现、可解释；是否同一根因由人/agent 给结论并说明依据。
+- 自检：新增 `src/core/similarity.selftest.cjs`（20 断言，含「不得误并」反证）与 e2e v0.7 段（同族合并/族成员同 cid/sidecar 记录/related 三块/不误并）；全仓 **202 断言全绿**（含 v0.6.3 dedup 19 条）。
+
 v0.6 语义要点：**拉取式（pull）**——`settings.autoAdd=false` 时，`--check` 照常增量扫描并推进水位线/指纹（8ms、0 token），但新发现不写 `inbox.md`，而是合并进 `state.json` 的 `deferred` 摘要（`{cat,text,n,first,last,ws[],refs[],excerpt}`，上限 `maxDeferred`）；用户主动说「小本本复盘 / 待审核箱」时才 `mine.cjs --add` 把暂存冲入待审箱（重建候选行 + `details/C###.md`，曾经处置过的标「复发（原 C0xx）」）。**已在待审箱里的候选不受影响**：命中共聚簇时仍只累加次数（不新增行）。**提醒句随开关二选一**（`agents.cjs`：注入文本必须与实际行为一致）：拉取式下只报一行「新发现 N 组已暂存（未入箱）」，不展开清单、不询问审核，比自动模式更省 token。**面板**：`GET /whale/inbox` 附带 `deferred` 组数，仅有暂存时候选入口不隐藏，卡片提示「回复『小本本复盘』入箱后审核」。实时采集（`liveCapture`）同样遵守 `autoAdd`：关掉也只暂存、不写箱。设计文档：`docs/2026_09_10_10_whale-notebook增量采集与实时入库v0.5开发实施计划.md` §4.7。
 
 ```powershell

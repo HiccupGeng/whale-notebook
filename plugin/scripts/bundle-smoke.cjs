@@ -42,4 +42,8 @@ if (!/var AUTO_VISIBLE = false/.test(code)) throw new Error('v0.5 约定：AUTO_
 for (const s of ['deferred', '已暂存', '小本本复盘']) {
   if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.6 结构: ' + s);
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4/v0.5/v0.6 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示）');
+// v0.7 内容断言：同族/相似候选——讨论消息必须带上程序算出的依据，不能只给单条
+for (const s of ['/whale/related', 'relatedBlock', '同族证据', '族×']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7 结构: ' + s);
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据）');

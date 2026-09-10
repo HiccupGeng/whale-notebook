@@ -11,7 +11,7 @@ import engine from '../src/collector/engine.cjs';
 import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.6.2' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.0' };
 
 function sendJson(res, code, obj) {
   try {
@@ -138,6 +138,19 @@ export function apply(ctx) {
       sendJson(res, 200, out);
     }),
   }), 'whale-notebook: POST /whale/inbox/delete');
+
+  // ---- v0.7：同族/相关候选（讨论会话的确定性依据：家族成员 + 相似候选 + 可能覆盖的条目）----
+  ctx.effect(() => web.register({
+    kind: 'exact',
+    path: '/whale/related',
+    handler: wrap((req, res) => {
+      if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      const id = new URL(req.url, 'http://whale.local').searchParams.get('id') || '';
+      const out = server.relatedPayload(id);
+      if (!out.ok) return sendJson(res, 404, out);
+      sendJson(res, 200, out);
+    }),
+  }), 'whale-notebook: GET /whale/related');
 
   // ---- v0.5：面板 ⟳ 触发的增量扫描（先把实时缓冲落盘，再按水位线扫新增）----
   let scanning = false;
