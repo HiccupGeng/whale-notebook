@@ -10,8 +10,9 @@ import server from '../src/ui/server.cjs';
 import engine from '../src/collector/engine.cjs';
 import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
+import { zstdAvailable } from '../src/collector/decoder.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.4' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.5' };
 
 function sendJson(res, code, obj) {
   try {
@@ -50,6 +51,11 @@ function readJsonBody(req, cap = 16384) {
 function wrap(handler) {
   return async (req, res) => {
     try {
+      // v0.7.5（审计 N3/N4）：8 个端点统一过闸 —— Host 必须回环（防 DNS rebinding）、
+      //   Origin/Referer 与 Sec-Fetch-Site 必须同源（防跨站请求）、写操作必须 JSON（防跨站简单请求）。
+      //   本机面板、CLI 探针、curl 都不受影响（它们本就带回环 Host，写操作本就发 JSON）。
+      const g = server.guardRequest({ method: req.method, headers: req.headers });
+      if (!g.ok) return sendJson(res, g.code, { ok: false, error: g.error });
       await handler(req, res);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: `whale API 内部错误: ${err && err.message ? err.message : String(err)}` });
@@ -189,14 +195,20 @@ export function apply(ctx) {
     handler: wrap((req, res) => {
       if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
       const state = repo.readState();
+      const files = state.files || {};
       sendJson(res, 200, {
         ok: true,
         version: PACKAGE.version,
         live: live ? live.status() : null,
-        watermarks: Object.keys(state.files || {}).length,
+        watermarks: Object.keys(files).length,
         clusters: Object.keys(state.clusters || {}).length,
         fingerprints: (state.seenFingerprints || []).length,
         lastScan: state.lastScan,
+        // v0.7.5（审计 N20/N25）：把"采集是否健康"暴露出来 —— 环境能力、上轮扫描健康度、写盘诊断
+        zstd: zstdAvailable(),
+        scan: state.lastScanStats || null,
+        stuckWatermarks: Object.keys(files).filter((k) => (files[k] && files[k].badRounds || 0) > 0).length,
+        diag: Object.assign({}, repo.stateDiag),
       });
     }),
   }), 'whale-notebook: GET /whale/live');

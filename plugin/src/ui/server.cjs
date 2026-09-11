@@ -143,4 +143,48 @@ function deleteCandidate({ id, now }) {
   }
 }
 
-module.exports = { ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate, solvedPayload, entryPayload, relatedPayload };
+// v0.7.5（审计 N3/N4）：端点最小防护（纯函数，便于单测；HTTP 侧适配在 lib/index.js）
+//   背景：8 个 /whale/* 端点无鉴权、无 Origin/Host 校验 —— 任意网页可对 127.0.0.1:3080
+//   发跨站 POST 产生副作用（删候选、触发扫描），响应虽读不到但副作用已发生。
+//   三道闸门（都不影响本机面板与 CLI/探针）：
+//     ① Host 必须是回环地址 —— DNS rebinding 的正解是 Host 白名单（Sec-Fetch-Site 对同源重绑定无效）
+//     ② Origin/Referer 若存在，必须是回环源 —— 挡住跨站发起
+//     ③ 变更类请求必须 application/json —— 跨站"简单请求"（text/plain 等）就此失效，浏览器必发预检而我们不答 CORS
+const LOOPBACK_HOSTNAME_RE = /^(?:127\.0\.0\.1|localhost|\[::1\]|::1)$/i;
+function isLoopbackHostHeader(host) {
+  const s = String(host || '').trim();
+  if (!s) return true; // 无 Host 头（极少数裸 HTTP/1.0 客户端）：不因此拒绝
+  return LOOPBACK_HOSTNAME_RE.test(s.replace(/:\d+$/, ''));
+}
+function originHostname(value) {
+  try { return new URL(String(value)).hostname; } catch { return null; }
+}
+function guardRequest(input, opts) {
+  const o = opts || {};
+  const method = String((input && input.method) || 'GET').toUpperCase();
+  const h = (input && input.headers) || {};
+  if (!isLoopbackHostHeader(h.host)) {
+    return { ok: false, code: 403, error: `已拒绝：Host=${String(h.host)} 不是回环地址（防 DNS rebinding）` };
+  }
+  const src = h.origin || h.referer;
+  if (src) {
+    const hn = originHostname(src);
+    if (!hn || !LOOPBACK_HOSTNAME_RE.test(hn)) {
+      return { ok: false, code: 403, error: `已拒绝：来源 ${hn || String(src).slice(0, 40)} 不是本机页面（防跨站请求）` };
+    }
+  }
+  const sfs = String(h['sec-fetch-site'] || '').toLowerCase();
+  if (sfs && sfs !== 'same-origin' && sfs !== 'none') {
+    return { ok: false, code: 403, error: `已拒绝：Sec-Fetch-Site=${sfs}（跨站请求）` };
+  }
+  const isWrite = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+  if (isWrite && o.requireJson !== false) {
+    const ct = String(h['content-type'] || '').toLowerCase();
+    if (ct.indexOf('application/json') !== 0) {
+      return { ok: false, code: 415, error: '已拒绝：写操作必须 Content-Type: application/json（防跨站简单请求）' };
+    }
+  }
+  return { ok: true };
+}
+
+module.exports = { ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate, solvedPayload, entryPayload, relatedPayload, guardRequest, isLoopbackHostHeader };

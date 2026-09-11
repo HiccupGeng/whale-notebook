@@ -10,24 +10,57 @@ const { zstdDecompressSync } = require('node:zlib');
 
 const ZSTD_MAGIC = 4247762216;
 
-function scanFrames(buffer) {
+// v0.7.5（审计 N20）：Node 内建 zstd 的可探测性 —— 旧 Node 上 `require('node:zlib')` 不报错、
+//   但 `zstdDecompressSync` 是 undefined，于是每帧解压都抛：事件恒 0、offset 永不推进、
+//   CLI 仍以 0 退出并打印「新发现 0 条」，实时采集也完全无感（它不读日志）——这是最危险的静默停摆。
+//   探测到缺失就明确报错，宁可不采集，也不要假装"没有新发现"。
+const ZSTD_OK = typeof zstdDecompressSync === 'function';
+const ZSTD_REQUIRED_MSG = 'Node 缺少 zlib.zstdDecompressSync（需 Node ≥ 22.15 / 23.8）：会话日志无法解码，采集已停止（不是「无新发现」）';
+function zstdAvailable() { return ZSTD_OK; }
+function assertZstd() { if (!ZSTD_OK) throw new Error(ZSTD_REQUIRED_MSG); }
+
+// v0.7.5（审计 N20）：帧扫描必须**自带边界检查**。
+//   旧写法直接 readUIntLE 读块头：末尾半写帧会让它读越界抛 ERR_OUT_OF_RANGE，
+//   于是"正在写入的尾巴"被上层当成"整文件解码失败"（badFiles++ 且不更新水位线），
+//   而真正的中段损坏与它长得一样，没人能区分。
+//   现在返回 { frames, end, reason }：
+//     complete = 正好扫到缓冲区末尾；eof = 尾巴没写完（正常，下轮再来）；bad = 帧头不自洽且后面还有数据（真损坏）。
+function scanFramesEx(buffer) {
   const frames = [];
   let offset = 0;
+  const fail = (reason) => ({ frames, end: offset, reason });
   while (offset < buffer.length) {
     const start = offset;
-    if (buffer.length - offset < 4 || buffer.readUInt32LE(offset) !== ZSTD_MAGIC) break;
+    if (buffer.length - offset < 4) return fail('eof');           // 不足 4 字节：半个帧头
+    if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) return fail('bad'); // magic 不对且后面还有数据 → 中段损坏
     offset += 4;
+    if (offset >= buffer.length) return fail('eof');
     const d = buffer.readUInt8(offset); offset += 1;
     const csf = d >>> 6; const single = (d & 32) !== 0; const checksum = (d & 4) !== 0;
     const df = d & 3; const db = df === 3 ? 4 : df;
     const cb = csf === 0 ? (single ? 1 : 0) : (1 << csf);
-    offset += (single ? 0 : 1) + db + cb;
-    for (;;) { const bh = buffer.readUIntLE(offset, 3); offset += 3; const last = (bh & 1) !== 0; const bt = (bh >>> 1) & 3; offset += (bt === 1 ? 1 : (bh >>> 3)); if (last) break; }
-    if (checksum) offset += 4;
+    const headSkip = (single ? 0 : 1) + db + cb;
+    if (offset + headSkip > buffer.length) return fail('eof');     // 帧描述符/字典/FCS 被截断
+    offset += headSkip;
+    for (;;) {
+      if (offset + 3 > buffer.length) return fail('eof');          // 块头被截断
+      const bh = buffer.readUIntLE(offset, 3); offset += 3;
+      const last = (bh & 1) !== 0; const bt = (bh >>> 1) & 3;
+      const extra = bt === 1 ? 1 : (bh >>> 3);
+      if (offset + extra > buffer.length) return fail('eof');      // 块内容被截断
+      offset += extra;
+      if (last) break;
+    }
+    if (checksum) {
+      if (offset + 4 > buffer.length) return fail('eof');
+      offset += 4;
+    }
     frames.push([start, offset]);
+    if (offset === start) return fail('bad'); // 理论上不可达：防死循环
   }
-  return frames;
+  return { frames, end: offset, reason: 'complete' };
 }
+function scanFrames(buffer) { return scanFramesEx(buffer).frames; }
 
 // 从 offset 起到文件末尾的字节读入内存（只读该区间，不读全文件）
 function readTail(file, offset) {
@@ -57,8 +90,9 @@ function readTail(file, offset) {
 //   badFrom=true 表示 offset 不在帧头（水位线失效），调用方应退回 0 全量重扫该文件；
 //   partial=true 表示尾部存在未完成/损坏帧（水位线已停在其前）。
 function decodeLinesFrom(file, offset) {
+  assertZstd();
   const tail = readTail(file, offset);
-  const out = { lines: [], nextOffset: tail.from, frames: 0, readFrom: tail.from, badFrom: false, partial: false };
+  const out = { lines: [], nextOffset: tail.from, frames: 0, readFrom: tail.from, badFrom: false, partial: false, corruptAt: null };
   if (tail.reset) out.badFrom = true;
   if (!tail.buf.length) return out;
   if (tail.buf.length < 4 || tail.buf.readUInt32LE(0) !== ZSTD_MAGIC) {
@@ -66,21 +100,29 @@ function decodeLinesFrom(file, offset) {
     out.nextOffset = 0;
     return out;
   }
-  const frames = scanFrames(tail.buf);
+  const ex = scanFramesEx(tail.buf);
+  const frames = ex.frames;
   out.frames = frames.length;
   let consumed = 0;
   let stopped = false;
-  for (const [s, e] of frames) {
+  for (let i = 0; i < frames.length; i++) {
+    const s = frames[i][0];
+    const e = frames[i][1];
     let plain;
     try {
       plain = zstdDecompressSync(tail.buf.subarray(s, e)).toString('utf8');
     } catch {
-      stopped = true; // 末帧仍在写 / 帧损坏：不推进 offset
+      stopped = true; // 解压失败：不推进 offset（下面按失败位置分类）
+      // v0.7.5（审计 N20）：末帧失败 = 正在写入（正常，下次重试）；
+      //   非末帧失败 = 文件真损坏，**该帧之后的所有日志永远读不到**（每轮都在同一处重试）——必须能被告警。
+      out.corruptAt = i < frames.length - 1 ? 'mid' : 'tail';
       break;
     }
     for (const line of plain.split('\n')) if (line.trim().length) out.lines.push(line);
     consumed = e;
   }
+  // 帧扫描本身停在"帧头不自洽"处（且后面还有字节）= 中段损坏；停在缓冲区末尾 = 尾巴没写完（正常重试）
+  if (!stopped && ex.reason === 'bad') out.corruptAt = 'mid';
   out.nextOffset = tail.from + consumed;
   // 尾部残留 = 有帧没被消费（半写或解码失败）→ 下次重试；也可能是被截断的半个帧头
   out.partial = stopped || consumed < tail.buf.length;
@@ -103,4 +145,4 @@ function textOf(content) {
   return content.filter((c) => c && c.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('\n').trim();
 }
 
-module.exports = { scanFrames, decodeLines, decodeLinesFrom, readTail, textOf, ZSTD_MAGIC };
+module.exports = { scanFrames, scanFramesEx, decodeLines, decodeLinesFrom, readTail, textOf, ZSTD_MAGIC, zstdAvailable, assertZstd, ZSTD_REQUIRED_MSG };

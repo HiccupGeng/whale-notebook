@@ -72,7 +72,7 @@ function readSettings() { return readJson(P.settings, {}); }
 //   deferred : { "<聚簇哈希>": { cat, text, n, first, last, ws[], refs[], excerpt, at } } ← 拉取式暂存摘要
 //              （settings.autoAdd=false 时新发现只进这里，不写 inbox；mine.cjs --add 才入箱）
 const STATE_VERSION = 2;
-function emptyState() { return { v: STATE_VERSION, lastScan: 0, seenFingerprints: [], nextCandidateId: 1, files: {}, clusters: {}, deferred: {} }; }
+function emptyState() { return { v: STATE_VERSION, lastScan: 0, seenFingerprints: [], nextCandidateId: 1, files: {}, clusters: {}, deferred: {}, lastScanStats: null }; }
 function normalizeState(s) {
   const out = (s && typeof s === 'object') ? s : {};
   if (!Array.isArray(out.seenFingerprints)) out.seenFingerprints = [];
@@ -81,6 +81,7 @@ function normalizeState(s) {
   if (!out.clusters || typeof out.clusters !== 'object') out.clusters = {};
   if (!out.deferred || typeof out.deferred !== 'object') out.deferred = {};
   if (!Number.isFinite(out.lastScan)) out.lastScan = 0;
+  if (out.lastScanStats == null || typeof out.lastScanStats !== 'object') out.lastScanStats = null; // v0.7.5：扫描健康度
   out.v = STATE_VERSION;
   return out;
 }
@@ -128,6 +129,10 @@ function mergeStates(disk, mine) {
   out.seenFingerprints = seen;
   out.nextCandidateId = Math.max(out.nextCandidateId || 1, b.nextCandidateId || 1);
   out.lastScan = Math.max(out.lastScan || 0, b.lastScan || 0);
+  // 扫描健康度取"更新的一次"（v0.7.5）
+  const aStats = out.lastScanStats;
+  const bStats = b.lastScanStats;
+  if (bStats && (!aStats || (bStats.at || 0) >= (aStats.at || 0))) out.lastScanStats = bStats;
   return out;
 }
 function writeState(state) {

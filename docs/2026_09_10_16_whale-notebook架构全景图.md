@@ -465,7 +465,11 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 > 　N19+N5 state 完整性（严格读 · 损坏留证 `.corrupt-<ts>` · 临时名带 pid · 写前 CAS 并集合并 · `state.lock` 跨进程写锁 · 编号下限取归档最大+1）<br>
 > 　N18 归档签名修正（剔空列 · 接受整列时间戳 · 复发前缀归一化 · 实时采集也传索引）——**实测复算：污染行 82/130（63%）→ 0/130**<br>
 > 　顺带：N2 sidecar 路径打码与 `undefined`、N23 编号放宽 `^C\d{3,}$`、N26 `--prewarm --dry` 零写盘、N6 面板删除原子写<br>
-> 　**仍未修**：N3/N4（端点无鉴权与 Host 校验，需宿主层配合）· N7（`/whale/scan` 同步执行）· N8（回声漏网）· N10–N17 · N20–N22 · N24–N25 · N27–N29 —— 详见审计报告 §7 的 P1/P2 路线。
+> **✅ 第二批（v0.7.5，2026-09-11）**：<br>
+> 　**N3/N4 端点闸门**——8 个 `/whale/*` 统一校验 `Host` 必须回环（防 DNS rebinding）+ `Origin`/`Referer` 必须同源 + `Sec-Fetch-Site` 非跨站 + **写操作必须 `Content-Type: application/json`**（跨站"简单请求"失效）。接线验证：回环 GET 200 · `Host=evil.example` 403 · 跨站 Origin 403 · `Sec-Fetch-Site: cross-site` 403 · `text/plain` 写请求 415 · 跨站删除 403（未到业务层）<br>
+> 　**N20/N25 采集健康度可观测**——zstd 能力探测（缺失即明确失败，不再"0 事件 + 退出码 0"）· `scanFrames` 全量边界检查（末尾半写帧不再抛 `ERR_OUT_OF_RANGE` 被误判为整文件失败）· `corruptAt=mid/tail` 分类 · `corruptFrames`/`badRounds`/`stuckFiles` 落水位线 · `state.lastScanStats` + **`GET /whale/live` 新增 `zstd`/`scan`/`stuckWatermarks`/`diag`**<br>
+> 　现场事实：本机 `dsh web` 跑在 `C:\Program Files\nodejs\node.exe` **v24.19.0**，`zstdDecompressSync` 可用 → **当前没有静默停摆**，本次是把它变成"将来一定被告警"<br>
+> 　**仍未修**：N5/N19 的进一步单写者化（现为锁 + CAS 合并）· N7（`/whale/scan` 同步执行）· N8（回声漏网）· N10–N17 · N21–N22 · N24 · N27–N29 —— 详见审计报告 §7 的 P1/P2 路线。
 
 ### 11.1 原缺口清单（逐条复核结果）
 

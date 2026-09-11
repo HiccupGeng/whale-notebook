@@ -59,4 +59,4 @@ if (!/var cssNode = ensureCss\(\)/.test(code) || code.indexOf('if (cssNode && cs
 if (code.indexOf('!== null) return null;') === -1) {
   throw new Error('v0.7.3 约定：ensureCss 复用分支必须返回 null（跨代不误删）');
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.4 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收）');
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.5 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收）');

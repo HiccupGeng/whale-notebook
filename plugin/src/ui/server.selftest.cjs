@@ -195,6 +195,33 @@ try {
     mdTitles.indexOf('工具报错（未归类的失败结果）') < mdTitles.indexOf('zzz-unregistered'),
     { mdTitles, pvTitles });
 
+  // ============ v0.7.5（审计 N3/N4）：端点最小防护（Host/Origin/Sec-Fetch-Site/写操作 CT）============
+  const G = server.guardRequest;
+  const local = { method: 'GET', headers: { host: '127.0.0.1:3080' } };
+  check('v0.7.5 本机面板请求放行（Host 回环、无 Origin）', G(local).ok === true, G(local));
+  check('v0.7.5 localhost/[::1] 亦放行', G({ method: 'GET', headers: { host: 'localhost:3080' } }).ok === true
+    && G({ method: 'GET', headers: { host: '[::1]:3080' } }).ok === true);
+  check('v0.7.5 无 Host 头不拒绝（裸探针兼容）', G({ method: 'GET', headers: {} }).ok === true);
+  // ① DNS rebinding：Host 不是回环 → 403
+  const rb = G({ method: 'GET', headers: { host: 'evil.example:3080' } });
+  check('v0.7.5 Host 非回环 → 403（防 DNS rebinding）', rb.ok === false && rb.code === 403, rb);
+  // ② 跨站来源 → 403
+  const xo = G({ method: 'GET', headers: { host: '127.0.0.1:3080', origin: 'https://evil.example' } });
+  check('v0.7.5 跨站 Origin → 403', xo.ok === false && xo.code === 403, xo);
+  check('v0.7.5 同源 Origin 放行', G({ method: 'POST', headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080', 'content-type': 'application/json' } }).ok === true);
+  const xr = G({ method: 'GET', headers: { host: '127.0.0.1:3080', referer: 'https://evil.example/a' } });
+  check('v0.7.5 跨站 Referer → 403', xr.ok === false && xr.code === 403, xr);
+  // ③ Sec-Fetch-Site
+  const sf = G({ method: 'POST', headers: { host: '127.0.0.1:3080', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' } });
+  check('v0.7.5 Sec-Fetch-Site=cross-site → 403', sf.ok === false && sf.code === 403, sf);
+  check('v0.7.5 Sec-Fetch-Site=same-origin 放行', G({ method: 'POST', headers: { host: '127.0.0.1:3080', 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' } }).ok === true);
+  // ④ 写操作必须 application/json（挡住 CORS 简单请求：跨站 text/plain 就发不出去了）
+  const ct = G({ method: 'POST', headers: { host: '127.0.0.1:3080', 'content-type': 'text/plain' } });
+  check('v0.7.5 写操作缺 JSON Content-Type → 415', ct.ok === false && ct.code === 415, ct);
+  check('v0.7.5 写操作带 JSON Content-Type 放行', G({ method: 'POST', headers: { host: '127.0.0.1:3080', 'content-type': 'application/json; charset=utf-8' } }).ok === true);
+  check('v0.7.5 GET 不要求 Content-Type', G({ method: 'GET', headers: { host: '127.0.0.1:3080' } }).ok === true);
+  check('v0.7.5 非法 Origin 字面量 → 403', G({ method: 'GET', headers: { host: '127.0.0.1:3080', origin: 'not-a-url' } }).ok === false);
+
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -18,6 +18,7 @@ const { fmtTime } = require('../core/util.cjs');
 const { oneLiner } = require('../core/summarize.cjs');
 const { PAT_IDS } = require('./patterns.cjs');
 const { collectEventsFrom } = require('./scanner.cjs');
+const { zstdAvailable, ZSTD_REQUIRED_MSG } = require('./decoder.cjs');
 const { INBOX_HEADER, inboxRow } = require('../core/schema.cjs');
 
 const DEFAULT_READD_COOLDOWN_DAYS = 7;
@@ -217,6 +218,8 @@ function scanHistory(state, settings, opts) {
   const files = sessionFiles(settings);
   const events = [];
   let scanned = 0, skipped = 0, readBytes = 0, resets = 0, retryPending = 0, badFiles = 0;
+  let corruptFrames = 0;                 // v0.7.5：非末帧损坏次数（其后的日志读不到）
+  const stuckFiles = [];                 // v0.7.5：连续 ≥2 轮仍卡在同一坏帧的文件（最多记 5 条）
   for (const f of files) {
     let st; try { st = fs.statSync(f.file); } catch { continue; }
     const wm = state.files[f.file];
@@ -232,11 +235,18 @@ function scanHistory(state, settings, opts) {
     scanned++;
     readBytes += Math.max(0, st.size - res.readFrom);
     for (const ev of res.events) events.push(Object.assign({}, ev, { file: f.file }));
+    // v0.7.5（审计 N20）：中段坏帧 = 真损坏，且该帧之后的内容永远读不到 —— 记轮次，连续 ≥2 轮升级为可见告警
+    const badRounds = res.corruptAt === 'mid' ? ((wm && Number.isFinite(wm.badRounds) ? wm.badRounds : 0) + 1) : 0;
+    if (res.corruptAt === 'mid') {
+      corruptFrames++;
+      if (badRounds >= 2 && stuckFiles.length < 5) stuckFiles.push({ file: f.file, offset: res.nextOffset, rounds: badRounds });
+    }
     state.files[f.file] = {
       size: st.size,
       mtimeMs: res.partial ? -1 : st.mtimeMs, // 半写/坏帧：下次必扫（从 offset 续，代价只有尾部）
       offset: res.nextOffset,
       frames: res.frames,
+      badRounds, // v0.7.5：连续卡在同一坏帧的轮次（0 = 正常）
       sid: res.sid || f.sid,
       ws: res.ws || (wm && wm.ws) || f.sid,
       calls: res.calls || (wm && wm.calls) || {}, // 跨窗口继承 callId→工具名（否则 tool 退化成 '?'、聚簇键漂移）
@@ -244,7 +254,33 @@ function scanHistory(state, settings, opts) {
     if (res.partial) retryPending++;
   }
   events.sort((a, b) => a.at - b.at);
-  return { events, stats: { files: files.length, scanned, skipped, readBytes, resets, retryPending, badFiles, ms: Date.now() - t0 } };
+  return {
+    events,
+    stats: {
+      files: files.length, scanned, skipped, readBytes, resets, retryPending, badFiles,
+      corruptFrames, stuckFiles, // v0.7.5（审计 N20）：中段坏帧与"卡住的文件"必须能被看见
+      ms: Date.now() - t0,
+    },
+  };
+}
+
+// v0.7.5（审计 N20）：把本轮扫描的"健康度"落进 state —— 排障信息（坏帧/待重试/解码失败/卡住的文件）
+//   过去只出现在一次性 CLI 文本里，面板与 /whale/live 看不到，于是"半瘫"没人知道。
+//   路径只留 sid/文件名（不落个人目录）。
+function persistScanStats(state, s, mode) {
+  state.lastScanStats = {
+    at: Date.now(),
+    mode: mode || '',
+    files: s.files, scanned: s.scanned, skipped: s.skipped,
+    readBytes: s.readBytes, resets: s.resets, retryPending: s.retryPending, badFiles: s.badFiles,
+    corruptFrames: s.corruptFrames || 0,
+    stuckFiles: (s.stuckFiles || []).map((x) => ({
+      where: path.basename(path.dirname(x.file)) + '/' + path.basename(x.file),
+      offset: x.offset,
+      rounds: x.rounds,
+    })),
+    ms: s.ms,
+  };
 }
 
 // 只记指纹（--prewarm 基线）：返回本轮“被消费”的事件数
@@ -631,6 +667,8 @@ function runScan(mode, opts) {
   // 而不是"锁忙" —— 数据目录不存在时连锁文件都建不出来。
   if (!fs.existsSync(repo.P.sessions)) return { ok: false, text: 'no sessions root' };
   if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
+  // v0.7.5（审计 N20）：运行环境缺 zstd 能力时**明确失败**，绝不"0 事件 + 退出码 0"地静默停摆
+  if (!zstdAvailable()) return { ok: false, text: ZSTD_REQUIRED_MSG };
   const willWrite = o.dry !== true && mode !== '--stats';
   const release = willWrite ? repo.acquireLockSync(1500) : null;
   if (willWrite && !release) {
@@ -683,6 +721,8 @@ function runScanInner(mode, o) {
   const s = scan.stats;
   const scanLine = `解码 ${s.scanned}/${s.files} 文件（未更新跳过 ${s.skipped}）｜读取 ${(s.readBytes / 1048576).toFixed(2)}MB` +
     (s.resets ? `｜水位线重置 ${s.resets}` : '') + (s.retryPending ? `｜待重试 ${s.retryPending}` : '') +
+    (s.corruptFrames ? `｜帧损坏 ${s.corruptFrames}（其后日志读不到）` : '') +
+    (s.stuckFiles && s.stuckFiles.length ? `｜⚠ 卡住 ${s.stuckFiles.length} 个文件（连续 ≥2 轮同一坏帧，见 /whale/live 的 scan.stuckFiles）` : '') +
     (s.badFiles ? `｜解码失败 ${s.badFiles}` : '');
 
   if (mode === '--stats') {
@@ -707,6 +747,7 @@ function runScanInner(mode, o) {
   if (mode === '--prewarm') {
     const consumed = markSeen(state, scan.events, Number.isFinite(settings.maxFingerprints) ? settings.maxFingerprints : DEFAULT_MAX_FINGERPRINTS);
     state.lastScan = Date.now();
+    persistScanStats(state, s, mode); // v0.7.5：扫描健康度落 state（排障可见）
     if (!o.dry) repo.writeState(state); // v0.7.4（审计 N26）：--prewarm --dry 必须零写盘
     const ms = Date.now() - t0;
     return {
@@ -720,6 +761,7 @@ function runScanInner(mode, o) {
   // v0.6：autoAdd=false 且未显式 --add 时改为暂存（不写 inbox）
   const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true, add: o.add === true, resolved: resolvedIndex });
   state.lastScan = Date.now();
+  persistScanStats(state, s, mode); // v0.7.5：扫描健康度落 state（/whale/live 可视化）
   if (!o.dry) repo.writeState(state);
   const ms = Date.now() - t0;
   const bits = [];
@@ -801,6 +843,8 @@ module.exports = {
   resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
   // v0.7.4：归档索引 + 最大编号的 mtime 缓存（实时采集与编号下限共用）
   loadResolvedCached, READD_PREFIX_RE,
+  // v0.7.5：扫描健康度落 state（/whale/live 可视化；导出供自测）
+  persistScanStats,
   // v0.7：族（同坑不同变体）—— 复用 state.clusters（同 cid 即同族）
   familyList, familyThresholds, familyNote,
 };

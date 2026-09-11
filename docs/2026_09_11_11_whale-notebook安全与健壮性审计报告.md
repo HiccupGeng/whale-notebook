@@ -180,7 +180,7 @@
 
 ## 7. 修复优先级与建议路线
 
-> **实施进度（2026-09-11 当日回填）**：**P0 三项 + P2 中的四项已随 v0.7.4 实施完毕并验证**（源码与部署副本已 `deploy-web --apply`，宿主半边待重启 `dsh web`）；P1 与其余 P2 项仍未修，保留在下表。实施证据见本节末尾「实施记录」。
+> **实施进度（2026-09-11 当日回填）**：**v0.7.4 完成 P0 三项 + 四项顺带修**；**v0.7.5 完成 P1-1（N3/N4 端点闸门）与 P1-5 的一半（N20/N25 采集健康度可观测）**。源码与部署副本均已 `deploy-web --apply`（`--check` exit 0），宿主半边待重启 `dsh web`；未修项保留在下表。实施证据见本节末尾「实施记录」。
 
 ### P0（先做，直接影响隐私承诺与用户记忆完整性）
 
@@ -220,7 +220,16 @@
 | 顺带 N26 | `engine.cjs`（prewarm 分支补 `!o.dry` 守卫） | 并入 repo/engine 断言与 `--dry` 语义 |
 | 顺带 N6 | `repo.cjs`（`removeInboxRows` 改走 `writeInboxText` 原子路径） | `server.selftest` 50 断言全绿 |
 
-**口径变化（供文档同步）**：源码自检由 **9 套件 320 断言** 变为 **10 套件 363 断言**（新增 `src/store/repo.selftest.cjs` 23 条）；13 个测试文件 PASS 累计 **434**；`redact.test` 22。部署副本已 `deploy-web --apply`（`--check` exit 0），**宿主半边需重启 `dsh web` 生效**（`mine.cjs` 批扫立即生效）。
+**口径变化（供文档同步）**：源码自检由 **9 套件 320 断言** 变为 **10 套件 386 断言**（新增 `src/store/repo.selftest.cjs` 23 条；`server` 50→63、`engine` 11→21）；13 个测试文件 PASS 累计 **457**；`redact.test` 22。部署副本已 `deploy-web --apply`（`--check` exit 0），**宿主半边需重启 `dsh web` 生效**（`mine.cjs` 批扫立即生效）。
+
+### 实施记录（第二批，v0.7.5）
+
+| 项 | 改动文件 | 验证证据 |
+|---|---|---|
+| **P1-1 端点闸门（N3/N4）** | `src/ui/server.cjs`（新增纯函数 `guardRequest` / `isLoopbackHostHeader`）、`lib/index.js`（`wrap()` 统一过闸，覆盖全部 8 个端点） | `server.selftest` 50→**63**（+13，含反证：回环/`localhost`/`[::1]`/无 Host/同源 Origin/`same-origin`/GET 无 CT 一律放行）；**mock ctx 接线验证**：回环 GET 200 · `Host=evil.example` 403 · 跨站 Origin 403 · `Sec-Fetch-Site: cross-site` 403 · `text/plain` 写请求 415 · 跨站删除 403（未到业务层）· 回环删除到达业务层（404 不存在，未产生副作用）。面板未改（本就发 JSON、本带回环 Host） |
+| **P1-5 一半：采集健康度（N20/N25）** | `src/collector/decoder.cjs`（`zstdAvailable`/`assertZstd`、`scanFramesEx` 边界检查、`corruptAt` 分类）、`engine.cjs`（`corruptFrames`/`badRounds`/`stuckFiles`/`persistScanStats`、zstd 缺失即 `ok:false`）、`scanner.cjs`（`corruptAt` 透传）、`lib/index.js`（`/whale/live` 增 `zstd`/`scan`/`stuckWatermarks`/`diag`）、`repo.cjs`（`lastScanStats` 归一化与合并） | `engine.selftest` 11→**21**（+10：正常帧、半写尾帧不算损坏、半个帧头不再抛 `ERR_OUT_OF_RANGE`、中段 magic 错位 → `mid`、`badRounds` 递进到 `stuckFiles`、健康度落 state）；**现场事实**：`dsh web`（PID 24956）运行在 `C:\Program Files\nodejs\node.exe` v24.19.0，`zstdDecompressSync` 与 `ZSTD_c_checksumFlag` 均可用 → 当前**未发生**静默停摆 |
+
+**仍未修（P1 剩余 / P2）**：N7（`/whale/scan` 同步执行阻塞事件循环）· N21（`--rebuild` 与实时采集的窗口，现由写锁覆盖但未做"暂停 live"）· N22（live 与批扫双计，需生成实际计数）· N8（回声漏网）· N24（echo 自我放大，**唯一已实测在发生的增长问题**）· N10–N17 · N27–N29。
 
 ---
 

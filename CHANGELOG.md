@@ -1,7 +1,37 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.4`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.5`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+
+## v0.7.5（2026-09-11）端点闸门（防跨站/防重绑定）· 采集健康度可观测
+
+**起因**：接 v0.7.4 的审计，修其中「安全」与「可观测」两类里最要紧的两项（用户指定）：**任意网页能否打到本机端点** 与 **采集会不会静默停摆而无人知道**。
+
+### ① 8 个 `/whale/*` 端点加统一闸门（`lib/index.js` + `src/ui/server.cjs`，审计 N3/N4）
+
+**问题**：端点无鉴权、无 Origin/Host 校验。实测（改前）带 `Origin: https://evil.example` 的 `POST /whale/scan` 返回 **200** —— 任意网页都能对 `127.0.0.1:3080` 发跨站 POST 产生**副作用**（删候选、触发扫描；候选号空间只有 C001–C999，可被穷举把整箱移入归档）；`readJsonBody` 也不校验 `Content-Type`，跨站"简单请求"（`text/plain`）连预检都不触发。DNS rebinding 侧：宿主路由层用字面量 base 解析 URL、不校验 `Host`，插件侧无白名单 → 重绑定后可以同源身份**读**数据。
+
+**修法**：新增纯函数 `server.guardRequest()`，在 `wrap()` 里对全部 8 个端点统一执行三道闸门——
+1. **Host 必须回环**（`127.0.0.1` / `localhost` / `[::1]`，端口任意）→ 否则 403。这是 DNS rebinding 的正解（`Sec-Fetch-Site` 对同源重绑定无效）；
+2. **Origin/Referer 若存在必须回环** → 否则 403；
+3. **`Sec-Fetch-Site` 若存在必须是 `same-origin`/`none`** → 否则 403；
+4. **写操作（POST）必须 `Content-Type: application/json`** → 否则 415（跨站简单请求就此失效；浏览器必发预检，而本服务不答 CORS）。
+
+**验证**：`server.selftest` +13 断言（含反证：本机面板、`localhost`、`[::1]`、无 Host 探针、同源 Origin、GET 无 CT 一律放行）；另用 mock ctx + mock req/res 直连 `lib/index.js` 做了**接线验证**：回环 GET → 200、`Host=evil.example` → 403、跨站 Origin → 403、`Sec-Fetch-Site: cross-site` → 403、`text/plain` 写请求 → 415、跨站删除 → 403（未到业务层）、回环删除 → 到业务层（404 不存在）。**未改面板：它本就发 JSON、本带回环 Host。**
+
+### ② 采集"静默停摆"可见化（`src/collector/decoder.cjs` + `engine.cjs` + `scanner.cjs` + `lib/index.js`，审计 N20/N25）
+
+**问题**（三条都指向同一件事：出事了没人知道）：
+- **环境降级**：旧 Node 上 `require('node:zlib')` 不报错但 `zstdDecompressSync` 是 `undefined` → 每帧解压都抛、事件恒 0、`offset` 永不推进，而 CLI 仍以 0 退出并打印「新发现 0 条」；实时采集完全不读日志，也无感。
+- **帧扫描越界**：`scanFrames` 直接读块头，末尾半写帧会让它抛 `ERR_OUT_OF_RANGE`，被上层当成"整文件解码失败"（`badFiles++`、水位线不更新）——**与真正的中段损坏长得一模一样**。
+- **中段损坏**：坏帧之后的所有日志**永远**读不到（每轮都在同一处重试），输出里只有一句「待重试 N」，既不落 state，面板与 `/whale/live` 也看不到。
+
+**修法**：① `decoder` 增 `zstdAvailable()/assertZstd()`：能力缺失时 `runScan` **明确失败**（CLI 非 0 退出、端点 500），不再"0 事件 + 成功"；② `scanFrames` 全量边界检查并改出 `scanFramesEx()`，返回 `{frames, end, reason}`：`eof` = 尾巴没写完（正常重试）、`bad` = 帧头不自洽且后面还有数据（中段损坏）；③ `decodeLinesFrom` 据此给出 `corruptAt = 'mid' | 'tail' | null`，`scanner` 透传；④ `scanHistory` 计 `corruptFrames`，把 `badRounds` 写进水位线，**连续 ≥2 轮**把文件记进 `stuckFiles`；⑤ 扫描健康度落 `state.lastScanStats`（路径只留 `sid/文件名`，不落个人目录），CLI 扫描行与 **`GET /whale/live` 新增 `zstd` / `scan` / `stuckWatermarks` / `diag`** 四个字段。
+
+**验证**：`engine.selftest` +10 断言（正常帧、半写尾帧不算损坏、半个帧头不抛、中段 magic 错位 → `mid`、`badRounds` 递进到 `stuckFiles`、健康度落 state）；本机 `dsh web` 实测运行在 `C:\Program Files\nodejs\node.exe` v24.19.0，`zstdDecompressSync` 可用 —— **当前没有静默停摆**，本版是把它变成"将来一定会被告警"。
+
+**验证汇总**：10 套件 **386 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＝ 13 个测试文件 PASS 累计 **457**（2026-09-11）。
+**生效**：改动含宿主半边（`lib/index.js`、`src/**`）→ **先 `deploy-web --apply`，再重启 `dsh web`**；`mine.cjs` 批扫立即生效。
 
 ## v0.7.4（2026-09-11）安全审计 P0 三项：打码补漏 · 状态文件完整性 · 归档签名修正
 
@@ -160,15 +190,15 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 | 套件 | 断言数 |
 |---|---|
 | `plugin/lifecycle/selftest.cjs` | 104 |
-| `plugin/src/ui/server.selftest.cjs` | 50 |
+| `plugin/src/ui/server.selftest.cjs` | 63 |
 | `plugin/src/core/privacy.selftest.cjs` | 23 |
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
 | `plugin/src/store/repo.selftest.cjs` | 23 |
-| `plugin/src/collector/engine.selftest.cjs` | 11 |
+| `plugin/src/collector/engine.selftest.cjs` | 21 |
 | `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
 | `plugin/src/collector/e2e.selftest.cjs` | 63 |
 | `plugin/src/collector/live.selftest.cjs` | 35 |
-| **合计** | **363**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **434**） |
+| **合计** | **386**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **457**） |
 
-最近一次全绿：**2026-09-11**（v0.7.4）。
+最近一次全绿：**2026-09-11**（v0.7.5）。

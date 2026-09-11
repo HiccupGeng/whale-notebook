@@ -190,7 +190,8 @@ function collectEventsFrom(file, offset, wm) {
   }
   return {
     events: out, nextOffset: dec.nextOffset, frames: dec.frames, readFrom: dec.readFrom,
-    badFrom: dec.badFrom, partial: dec.partial, sid, ws: st.ws,
+    badFrom: dec.badFrom, partial: dec.partial, corruptAt: dec.corruptAt || null, // v0.7.5：解码失败分类透传（审计 N20）
+    sid, ws: st.ws,
     calls: boundCalls(st.callName, 512),
   };
 }
