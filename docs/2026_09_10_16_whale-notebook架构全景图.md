@@ -1,8 +1,9 @@
 # 鲸鱼闪闪发光的小本本（whale-notebook）· 架构全景图
 
-> 日期：2026-09-10 ｜ 版本：v0.7.2（源码内容已前移至 v0.7.3，见 §11.1）｜ 作者：DSH AI 会话 ｜ 类型：架构全景（现状快照）
+> 日期：2026-09-11（复核）｜ 版本：**v0.7.3（版本口径已全量对齐）**｜ 作者：DSH AI 会话 ｜ 类型：架构全景（现状快照）
 > 定位：本文是**一张可通读的全景图**——把散落在 `plugin/README.md`、`PROJECT-INTRO.md`、`src/ui/contracts.md` 与 9 份设计文档里的架构事实收到一张图上，并补上**实测的现状**（§9）与**缺口清单**（§11）。
 > 不替代既有文档：版本沿革看 `CHANGELOG.md`，设计论证看 `docs/` 九份设计记录，操作流程看技能 `whale-notebook`。
+> **本轮复核（2026-09-11）**：§9 现状表已按现场重测；§11 缺口清单逐条标注「已修/未修」，并新增**安全与健壮性审计**一节（详见 `docs/2026_09_11_11_whale-notebook安全与健壮性审计报告.md`）。
 
 ---
 
@@ -98,10 +99,11 @@ flowchart TB
 ┌──────────────────────────── DSH 运行时 ────────────────────────────┐
 │                                                                    │
 │  【主机平面 / host composition】        ← 现在：已真实挂载           │
-│   profiles/web/cordis.patch.yml 标记区内一行 insert：                │
-│     - id: whale-notebook                                           │
-│       name: '@deepseek-ai/dsh-whale-notebook'                       │
-│       inject: [webServer]        ← 等 webServer 服务出现再挂载        │
+│   profiles/web/cordis.patch.yml 标记区内（block 序列）：        │
+│     - insert:                                                      │
+│         - id: whale-notebook                                       │
+│           name: '@deepseek-ai/dsh-whale-notebook'                  │
+│           inject: [webServer]    ← 等 webServer 服务出现再挂载        │
 │   提供：/whale/* HTTP 端点 + 订阅 session/event 常驻实时采集          │
 │                                                                    │
 │  【会话平面 / agent preset】          ← 现在：走官方注入机制，非插件行 │
@@ -164,7 +166,8 @@ flowchart TB
  └───────────────────────────────────────────────────────────────┘
 ```
 
-**依赖规则（禁止反向）**：`ui → viewmodel → store`；`review → (schema, inject, store)`；`inject → schema`；`collector → (core, store)`；`store → core`；`core` 零依赖。`lifecycle/` 与业务完全解耦，只依赖 node 内建。
+**依赖规则（禁止反向）**：`ui → viewmodel → store`，且 `viewmodel → core/schema`、`ui/server → core/similarity`；`review → (schema, inject, store)`；`inject → (schema, store)`；`collector → (core, store)` 且 `collector/cli → inject/agents`；`store → core/schema`；`core` 零依赖。`lifecycle/` 与业务完全解耦，只依赖 node 内建。
+（2026-09-11 复核补全：原表漏了 `inject → store`、`collector/cli → inject`、`viewmodel → core/schema`、`ui/server → core/similarity` 四条边；**「禁止反向」本身成立**——`store` 不 import `ui`，`core` 无任何项目内依赖。）
 
 | 层 | 一句话职责 | 关键导出 |
 |---|---|---|
@@ -209,8 +212,8 @@ flowchart LR
 | 工具输出特征 | 命令类工具（`pwsh/bash/node`）成功输出命中特征词典（`patterns.cjs`） |
 | 用户报障叙述 | `user/message` 命中 `NARRATION_IDS` + 强特征（限 12<n≤400 字，排除注入框架文本） |
 
-**特征词典（10 类正则）**：`encoding`（编码乱码）、`sandbox-ep`（EPERM/ConstrainedLanguage/管道）、`sandbox-file`（沙箱拒绝写/审批）、`stale-fs`（read-before-edit）、`timeout`、`git-net`、`model-api`（限额/429）、`file-missing`、`port-busy`，加引擎内建 `error`。
-`core/schema.cjs` 另备 16 个**条目展示类**标题（含 approval/tool-mode/secret/session-state/data-access/long-session/other）。
+**特征词典（9 类正则 + 引擎内建 `error` = 10 个采集类别）**：`patterns.cjs` 的 `PATTERNS` 共 **9** 条——`encoding`（编码乱码）、`sandbox-ep`（EPERM/ConstrainedLanguage/管道）、`sandbox-file`（沙箱拒绝写/审批）、`stale-fs`（read-before-edit）、`timeout`、`git-net`、`model-api`（限额/429）、`file-missing`、`port-busy`；第 10 个采集类别 `error` 由引擎内建（任何 `isError` 的工具结果直接判 `error`）。
+`core/schema.cjs` 另备 **17 个条目展示类标题**（9 个采集类别 + `error` + approval/tool-mode/secret/session-state/data-access/long-session/other）。
 **只有 4 类接受用户叙述**（`NARRATION_IDS = encoding / sandbox-ep / sandbox-file / git-net`）——避免把用户的普通描述误判成坑。
 
 **回声过滤（防止"小本本采集自己"）**：三级签名——`META_STRONG`、`META_DUMP` 单条即判；`META_WEAK` 需 ≥2 条。过滤对象是**自引用、探针输出、以及"把历史日志/sidecar/state 转储出来"的回显**（信封 `==== L### <kind>`、会话记录 JSON 信封、notebook 表行）。命中者**不静默丢弃**，落 `archive/echo-<日期>.md` 可事后审计。
@@ -218,18 +221,16 @@ flowchart LR
 ### 5.3 去重、聚簇、同族、复发（状态机）
 
 ```text
-                        ┌─────────────────────────────┐
-   新事件 ──指纹重复？──▶│ 丢弃（seenFingerprints，上限 5000）│
-      │否                                                 
+   新事件 ──指纹重复？──▶ [丢弃]（seenFingerprints，上限 5000）
+      │否
       ▼
    聚簇哈希 cat|tool|canonText(text)
-      │
-      ├─ 命中在箱聚簇 ─────────▶ bump：只累加次数（不开新行）
-      ├─ 命中已处置签名 ───────▶ resolved：压掉（归档表为事实源）
-      │       └─ 但冷却期（7 天）内 ─▶ silent：静默计数
-      ├─ 与某「族」相似 ───────▶ family：并入族代表行 + sidecar 记「同族并入」
-      ├─ 曾处置且超冷却期 ─────▶ readd：复发重开，行前缀「复发（原 C0xx）：」
-      └─ 都不是 ──────────────▶ new：新候选行（C###）
+      ├─ 命中在箱聚簇 ──────▶ bump    ：只累加次数（不开新行）
+      ├─ 命中已处置签名 ────▶ resolved：压掉（归档表为事实源）
+      │        └─ 冷却期（7 天）内 ─▶ silent：静默计数
+      ├─ 与某「族」相似 ────▶ family  ：并入族代表行 + sidecar 记「同族并入」
+      ├─ 曾处置且超冷却期 ──▶ readd   ：复发重开，行前缀「复发（原 C0xx）：」
+      └─ 都不是 ───────────▶ new     ：新候选行（C###）
 ```
 
 - **族（family）**：同一 `cid` 的多个聚簇天然构成一族；未命中同文聚簇但与族相似 → 并入族代表行（面板显示「**族×N**」），不新开行。
@@ -262,6 +263,8 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 | `--render-rules` | 预览 AGENTS 自动段正文 | 否 |
 | `--wall` | 预览已解决墙（INDEX.md）全文 | 否 |
 
+> **口径**：flag 共 **9 个**（5 个 MODE + `--render-rules` / `--wall` / `--full` / `--dry`）；表内 `--check --add`、`--rebuild --add` 属**组合用法**，不是独立参数。
+
 ---
 
 ## 6. 双半桥接：决策箱面板
@@ -293,12 +296,14 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 |---|---|---|
 | GET | `/whale/inbox` | `{pending, rows[{id,cat,n,ws,text,time,variants}], deferred}` — `variants` = 族×N |
 | GET | `/whale/inbox/detail?id=C###` | 候选详情 sidecar 文本（`details/C###.md`） |
-| GET | `/whale/solved` | 已解决墙：`{stats{active,global,project,disabled}, global[{cat,title,entries[]}], projects[{ws,entries[]}], disabled[]}` |
+| GET | `/whale/solved` | 已解决墙：`{ok, stats{active,global,project,disabled}, global[{cat,title,entries[]}], projects[{ws,entries[]}], disabled[]}` |
 | GET | `/whale/entry?id=E###` | 条目全文（frontmatter + 正文） |
 | GET | `/whale/live` | 运行状态：`{version, live{...}, watermarks, clusters, fingerprints, lastScan}` |
-| GET | `/whale/related?id=C###` | 讨论的**确定性依据**三块：`family`（族成员）+ `related`（相似候选，阈值 0.35）+ `entries`（可能已被条目覆盖，阈值 0.25） |
+| GET | `/whale/related?id=C###` | 讨论的**确定性依据**三块：`family`（族成员）+ `related`（相似候选，阈值 0.35）+ `entries`（可能已被条目覆盖：得分 = `max(相似度, 同类别则 0.3)`，再按 ≥0.25 过滤 → 同类别条目有 0.3 的隐性下限） |
 | POST | `/whale/inbox/delete` | body `{id:"C###"}` → 移入 `archive/`（**可恢复**，detail 随行归档）；带重入语义幂等 |
 | POST | `/whale/scan` | 面板 ⟳：先 `live.flush()` 落盘缓冲，再 `runScan('--check')`；扫描中再次请求返回 **409** |
+
+> **安全边界（2026-09-11 实测）**：端点**无鉴权、无 Origin/Referer 校验**，但 `dsh web` 只监听 `127.0.0.1:3080`，不对局域网暴露。残留风险 = **跨站请求伪造**（网页可盲发 POST 造成删除候选/触发扫描的副作用，读不到响应体）与**DNS rebinding**（无 Host 校验时的理论读取通道）；另一注意点是 `/whale/scan` 在宿主事件循环内**同步**执行，全量路径耗时 5s 级（详见 §11.2 N1/N4 与审计报告）。
 
 ### 6.3 面板交互面
 
@@ -308,12 +313,12 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 | ✅ 已解决墙卡 | 全局区（按类别分组）/ 项目区（按适用项目）/ 停用收尾；点行拉 `/whale/entry` 展开全文；页头 🐳 回待审箱 |
 | ⟳ | 先触发增量扫描（零 token），再刷新；tooltip 报「新发现 N 条 / 无新发现 + 耗时」 |
 | ✕（红色） | 删除候选 → 移入 `archive/`（可恢复） |
-| 💬 详细讨论 | 取 `/whale/related` 三块证据 → **开新会话**并写入开局消息；落点由**讨论落点路由**决定（见 §11.1） |
+| 💬 详细讨论 | 取 `/whale/related` 三块证据 → **开新会话**并写入开局消息；落点由**讨论落点路由**决定：候选工作区列**为空/未知 → 判 global**（保守放全局），**同名歧义或侧栏未注册 → 回退当前工作区**并在 toast 说明，单项目 → 开在该项目工作区，跨项目 → 开在固定的「鲸鱼全局」工作区；页脚三态开关（自动/🐳 全局/📁 项目）记 `localStorage` 键 `whale.discussRoute`，落点与依据写进开局消息 |
 | ⚡ 自动处理 | **已暂时隐藏**（`AUTO_VISIBLE=false`，代码与判定表保留）；恢复后仅允许"补全型小修"，禁区一律拒绝 |
 | `[WHALE-RISK]` | agent 回复固定行 → 面板弹红色警示条 + 「转人工讨论」 |
 | 页脚三态开关 | 「自动｜🐳 全局｜📁 项目」= 讨论落点手动覆盖，选择记 `localStorage` |
 | 自隐逻辑 | 🐳 卡仅当 `pending>0 或 deferred>0` 才出；✅ 卡仅当 `active>0` 才出；两者皆无 → **整面板 `display:none`**（不打扰） |
-| 反馈节奏 | toast 2800ms 淡出；`[WHALE-RISK]` 观察窗 = 每 4s 轮询会话快照、最多 45 次（≈180s），匹配行首 `[WHALE-RISK]` |
+| 反馈节奏 | toast 2800ms 淡出；`[WHALE-RISK]` 观察窗 = 每 4s 轮询会话快照、最多 45 次（≈180s），正则 `/^\s*\[WHALE-RISK\]/` **无 `m` 标志** → 实际只锚定「整段文本开头」（首行/首部），不是任意行首 |
 
 ---
 
@@ -335,7 +340,10 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
   <!-- whale-notebook:privacy -->    …（隐私尾注区）
 ~/.dsh/profiles/web/cordis.patch.yml
   # --- whale-notebook 决策箱面板 (deploy-web.cjs managed) ---
-       - insert: [ { id: whale-notebook, name: …, inject: [webServer] } ]
+       - insert:
+           - id: whale-notebook
+             name: '@deepseek-ai/dsh-whale-notebook'
+             inject: [webServer]
   # --- /whale-notebook panel ---
 ```
 
@@ -386,38 +394,47 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 
 > **去重的事实源不是 `state.json` 而是归档表**（`archive/archive-*.md`，末列非空 = 已处置）。state 可被 `--rebuild` 清空，故"是否已处置"必须问归档——这条修掉了"重置/重扫后同一个坑重复开行"。
 
-**`settings.json` 开关**：`autoCollect` / `autoAdd`（拉取式） / `liveCapture`（实时采集） / `scanMode` / `denylistWorkspaces` / `minOccurrences` / `maxRulesInAgents` / `reminderListMax` / `maxDeferred` / `maxFingerprints` / `reAddCooldownDays` / `familyThresholdSame|Cross`。
+**`settings.json` 开关**：12 个默认开关 —— `autoCollect` / `autoAdd`（拉取式） / `liveCapture`（实时采集） / `scanMode` / `checkEnabled` / `denylistWorkspaces` / `minOccurrences` / `maxRulesInAgents` / `reminderListMax` / `maxDeferred` / `maxFingerprints` / `reAddCooldownDays`；另加 **2 个可选覆盖键** `familyThresholdSame|Cross`（**未登记进 `SETTINGS_DEFAULTS`**，`engine.familyThresholds()` 有值就用、缺省走 `similarity.cjs` 的 0.6/0.8，见 §11.2 N9）。
 
 **隐私出口唯一**：`core/privacy.cjs` 的 `redact`（压白，指纹不变式依赖）/ `redactLines`（保留行结构）/ `hash36` / `canonText`。打码发生在**事件聚合之前**，所以 inbox / details / echo / 面板消费的全是已打码文本。
 
 ---
 
-## 9. 现状实况（2026-09-10 16:4x 实测）
+## 9. 现状实况（2026-09-11 11:0x 复核实测）
+
+> 复核方式：全部为**只读探针**（GET 端点、`--check`、`--stats`、`deploy-web --check`、`lifecycle check`、只读测试套件）＋ 数据目录直接比对；未写任何数据、未重启宿主。
 
 ### 9.1 挂载与运行
 
 | 项 | 实测值 |
 |---|---|
-| 插件包版本 | `package.json` = **0.7.2**（但源码内容已含 v0.7.3，见 §11.1） |
-| 主机平面 | 已挂载：`profiles/web/cordis.patch.yml` 内 `insert: whale-notebook (inject: [webServer])` |
-| 运行进程自报 | `GET /whale/live` → `version: 0.7.2`，`live.enabled: true` |
-| 实时采集计数 | sessions 9 · events 17 · flushes 16 · added 0 · bumped 1 · **echoGroups 5**（回声过滤生效）· deferredGroups 11 · lastError null |
-| 状态规模 | `watermarks` 26 份会话日志 · `clusters` 58 |
-| 端点可用性 | `/whale/inbox` `/whale/solved` `/whale/related` `/whale/live` 均 **200**（宿主半边为 v0.7.x 代码） |
+| 插件包版本 | **0.7.3**（`package.json`、`lib/index.js` 的 `PACKAGE.version`、两份 README、`PROJECT-INTRO.md`、`CHANGELOG.md` 六处口径一致 ✅ 已修） |
+| 主机平面 | 已挂载：`profiles/web/cordis.patch.yml` 标记区内 `insert: whale-notebook (inject: [webServer])` |
+| 运行进程 | `dsh web` 进程启动于 2026-09-11 10:47；`GET /whale/live` → `version: 0.7.3`、`live.enabled: true`、`lastError: null` |
+| 实时采集计数 | **进程内累计量，随运行持续增长、非稳定指标**：冷启动时 sessions 4 · events 1 · flushes 1 · deferredGroups 1；复核过程中（≈11:10）已变为 sessions 6 · events 13 · flushes 13 · echoGroups 7 · deferredGroups 6 · lastError null |
+| 状态规模 | `watermarks` 30 份会话日志 · `clusters` 59 · `fingerprints` 194→199（随会话实时增长） |
+| 端点可用性 | 6 个 GET 全 **200**（`inbox` / `inbox/detail` / `solved` / `entry` / `live` / `related`）；`POST /whale/scan` → 200，增量扫描 **83–100ms** |
+| 监听范围 | **仅 `127.0.0.1:3080`**（`Get-NetTCPConnection` 实测；LAN 地址均不可达）——端点无鉴权，但不对局域网暴露 |
 
 ### 9.2 数据面
 
 | 项 | 实测值 |
 |---|---|
 | 待审箱 | **2 条**：C128（git-net）、C129（error，`复发（原 C098）：`） |
-| 已解决墙 | active **5**（全局 4 + 项目级 1），停用 0 |
-| 暂存（未入箱） | `mine.cjs --check` → 新发现 0 组；**暂存共 9 组**；解码 5/26 文件、读 1.60MB、**170ms** |
+| 已解决墙 | active **5**（全局 4 + 项目级 1），停用 0；全局区类别顺序 编码 → tool-mode → git-net（`sortCategoryKeys` 契约在宿主生效） |
+| 暂存（未入箱） | 13 组 → 18 组（随本会话实时增长）；`--check` 新发现 0 组 |
+| 全量统计口径 | 工作区 3 · 事件 206 · 已记指纹 206 · 解码 **32/32** 文件 · **44.43MB** · **5084ms**（`mine.cjs --stats`，纯只读） |
+| 类别分布（累计） | error 96 · timeout 29 · encoding 26 · git-net 25 · sandbox-file 12 · file-missing 8 · sandbox-ep 5 · stale-fs 5 |
+| 数据规模 | `state.json` 171KB · `entries/` 5 篇 · `details/` 2 篇 · `archive/` 归档表 21KB + 回声档 28KB + 当日 0.4KB |
 | 生命周期清单 | `state=installed`、`phase=verified`；足迹 5 条（I×2、D×1、R×2） |
-| 漂移提示 | `AGENTS.md` 与 skill 的登记 hash ≠ 现场 hash（**属预期**：自动段每次入库都被重写） |
-| 部署对账 | `deploy-web --check` → **exit 1**：副本陈旧 3 个文件（缺 `scripts/links-doctor.cjs`、`links-doctor.selftest.cjs`，`README.md` 内容不同）；**`lib/*` 与权威源一致**，故面板功能不受影响 |
-| 测试 | 9 套件 312 断言 + `bundle-smoke` + `redact.test`(13) + `links-doctor.selftest`(43) + `discuss-route.selftest`（v0.7.3） |
+| 漂移提示 | `lifecycle check` → **exit 1**：AGENTS.md 与 skill 登记 hash ≠ 现场 hash（**属预期**：自动段每次入库都被重写，仍属 §11 未修项） |
+| 部署对账 | `deploy-web --check` → **exit 0**「副本与权威源逐字节一致 + patch 行在位」 ✅ 已修 |
+| 测试 | **404 断言全绿**：9 个源码套件 **320**（server 50 · privacy 10 · summarize 10 · similarity 20 · engine 10 · engine.dedup 19 · e2e 63 · live 34 · lifecycle 104）＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＋ `redact.test` 13；另有 `bundle-smoke`（抛异常式结构烟测，无 PASS 计数） |
 
-> **待办提醒**：`deploy-web --apply` 可清掉副本陈旧项（不改行为，只补 README 与维护脚本）；宿主半边 v0.7.2/0.7.3 若需生效，**重启 `dsh web`** 由用户择时。
+> **口径提醒（三档，勿混用）**：**320 断言 / 9 套件** = 源码自检口径；**391 断言 / 12 个测试文件** = 加维护工具两个 selftest 的实跑 PASS 行数；**404 断言 / 13 个测试文件** = 再把 `redact.test`(13) 计入。本轮实跑：12 个文件全部 exit 0、391 条 PASS 行、0 条 FAIL 行；`redact.test` 13 passed / 0 failed。
+
+> **口径提醒**：`320 断言 / 9 套件` 是「源码套件」口径；把维护工具的两个 selftest 一起算则是 **391 断言 / 12 个文件**。两处文档均已按各自口径写明，勿混用。
+> **待办**：宿主半边改动需**先 `deploy-web --apply` 再重启 `dsh web`**（顺序反了等于没生效，见 §11.3 教训）。当前副本与权威源一致，无需再部署。
 
 ---
 
@@ -438,30 +455,82 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 
 ---
 
-## 11. 缺口与风险（按重要性）
+## 11. 缺口与风险（2026-09-11 逐条复核）
 
-> **修复进度**：本节的 A/B 两批（CLI 退出码、样式节点回收、版本口径、部署对账、`error` 类别契约）已实施并验证，执行记录见 `docs/2026_09_10_17_whale-notebookAB批次修复开发实施计划.md` §9；下文仍按 2026-09-10 16 时快照记述。
+> **状态口径**：✅ 已修＝有提交与验证证据；🟡 未修＝已确认仍在；🔵 新增＝本轮（2026-09-11）审计首次记录。
+> A/B 两批修复的执行记录见 `docs/2026_09_10_17_whale-notebookAB批次修复开发实施计划.md` §9；本轮安全与健壮性明细见 `docs/2026_09_11_11_whale-notebook安全与健壮性审计报告.md`。
+> **严重度总览（2026-09-11）**：原 10 条缺口 → **已修 5 · 未修 4（含 1 条设计约束）· 误判 1**；本轮**新增 29 项**（§11.2 N1–N17 + §11.3 N18–N29），其中 **高 3 项**：**N1 打码对常见凭据失效**、**N18 归档「已处置」签名 63% 失配（重建后重复开行）**、**N19 `state.json` 损坏即静默归零并覆盖（无备份无告警）**。
 
-### 11.1 版本号漂移（建议优先修）
+### 11.1 原缺口清单（逐条复核结果）
 
-源码内容已前移到 **v0.7.3**——`scripts/discuss-route.selftest.cjs`、`bundle-smoke.cjs`（断言 v0.7.3 结构）、`src/ui/server.cjs`（v0.7.3 归档列修复）都已按 0.7.3 写，且 `lib/client.js` 已实现**讨论落点路由**（跨项目候选 → 开在固定的「鲸鱼全局」工作区；单项目 → 开在该项目工作区；未知/歧义 → 回退当前工作区并在 toast 说明；页脚三态开关 + `localStorage` 记忆；落点与依据写进新会话开局消息）。
-**但** `package.json`、`lib/index.js` 的 `PACKAGE.version`、`README`/`PROJECT-INTRO` 的当前版本行仍写 **0.7.2**。影响：`/whale/live` 自报版本、`deploy-web --check` 的版本感知、人读文档都会误判"当前版本"。
-> 连带提醒：`src/ui/contracts.md` §2 表格中「③ 桌宠 / ④ 外观」两行重复出现（文档小瑕疵）。
-
-### 11.2 其余缺口
-
-| # | 缺口 | 影响 | 备注 |
+| # | 缺口 | 状态 | 复核证据（2026-09-11） |
 |---|---|---|---|
-| 1 | **CLI 退出码恒 0** | `mine.cjs`/`collector/cli.cjs` 正常与失败都不设 `process.exitCode`，调用方只能解析 stdout 判定成败 | AGENTS 提醒句与技能都靠读输出文本；脚本化调用会有盲区 |
-| 2 | **部署副本陈旧** | `--check` exit 1（README + links-doctor 缺失）；仅 `--apply` 可清 | `lib/*` 已一致，面板行为不受影响 |
-| 3 | **宿主半边需重启** | 端点/实时采集的代码改动，不重启 `dsh web` 不生效 | 用户择时；面板改动刷新即可 |
-| 4 | **水位线"同尺寸同 mtime 改写"会漏采** | 极端情况下（内容等长且 mtime 未变）不重扫该文件 | 理论缺口，实际概率低 |
-| 5 | **`error` 类别无展示标题** | `CATEGORY_TITLES` 无 `error` 键，但实时采集大量产出 `cat='error'` | 面板/墙取名需兜底（当前显示原始键名） |
-| 6 | **面板是 DOM 外挂而非 Slot 注册** | 依赖 GUI 的 `fixed/z-index` 可用性；契约文档里 U 平面的目标形态是 client-plugin Slot | 现形态简单可控，但属于"外挂"而非官方布局位 |
-| 7 | **漂移守卫会为"预期改动"报警** | AGENTS.md/skill 每次入库都变，`check` 恒报漂移 | 语义上属正常，但削弱了"漂移 = 异常"的信号 |
-| 8 | **`state.json` 明文存 `calls`（callId→工具名）与暂存 `excerpt`** | 已打码，但属运行细节 | 本机数据，风险低 |
-| 9 | **面板 `<style>` 节点未纳入 disposer** | 面板卸载时样式节点残留（监听器、定时器、DOM 节点均已回收） | 单节点、幂等守卫，影响可忽略；但严格说不满足"每个副作用可逆" |
-| 10 | **toast/警示条节点在"卸载后重挂载"时不重建** | 若面板被卸载过一次再挂载，toast/警示条可能不再出现 | 顶层变量判空导致；实际很少触发（通常只挂载一次） |
+| — | **版本号漂移（原 §11.1）** | ✅ 已修 | 六处口径统一为 **0.7.3**；`/whale/live` 自报 `version: 0.7.3`；`deploy-web --check` exit 0；`contracts.md` 重复行已删 |
+| 1 | **CLI 退出码恒 0** | ✅ 已修 | `scripts/mine.cjs` 增 `exitCodeOf()`：成功 0 / 前置缺失 2 / 失败 1；e2e 套件新增 3 条断言覆盖 |
+| 2 | **部署副本陈旧** | ✅ 已修 | `deploy-web --apply`（14 文件）后 `--check` → **exit 0**「逐字节一致 + patch 行在位」 |
+| 3 | **宿主半边需重启** | 🟡 未修（设计如此） | 属架构约束，不是缺陷；配套教训已写进 §9 待办：**先 `--apply` 再重启**，否则重启加载的仍是旧副本 |
+| 4 | **水位线「同尺寸同 mtime 改写」漏采** | 🟡 未修（理论） | `engine.cjs:168` 的跳过判据仍只比 `size + mtimeMs`；实际日志为纯追加写，触发概率极低；坏帧/半写帧路径已有 `mtimeMs=-1` 强制重扫兜底 |
+| 5 | **`error` 类别无展示标题** | ✅ 已修 | `schema.cjs` 增 `error: '工具报错（未归类的失败结果）'`，位置在具体类别之后、`other` 之前；面板与 INDEX 同源显示 |
+| 6 | **面板是 DOM 外挂而非 Slot 注册** | 🟡 未修（架构选择） | `lib/client.js` 仍走 `document.head/body` 注入；官方 Slot 形态列在 §12 扩展点 |
+| 7 | **漂移守卫为「预期改动」报警** | 🟡 未修 | `lifecycle check` → **exit 1**（AGENTS.md / skill 两条 hash 漂移，均因自动段被合法重写）。削弱「漂移＝异常」信号 |
+| 8 | **`state.json` 明文存 `calls` 与暂存 `excerpt`** | 🟡 未修（低危） | 实测 `state.json` 171KB：`deferred[].excerpt` 为 ≤600 字**已打码**文本；`calls` 当前为空对象 `{}` |
+| 9 | **面板 `<style>` 节点未纳入 disposer** | ✅ 已修 | `ensureCss()` 返回本次创建的节点（复用时返回 `null`），disposer 只摘自己创建的那个（`bundle-smoke` 2 条断言钉住） |
+| 10 | **toast/警示条在「卸载后重挂载」不重建** | ❌ **不成立（复核为误判）** | `toastEl`/`alertEl` 是 `apply()` **作用域内的局部变量**（`client.js:443/446`，`apply` 起于 `:428`），重挂载时重新初始化为 `null` 并按惰性守卫重建；文件内不存在模块级同名变量 |
+
+### 11.2 本轮新增（安全 / 健壮性 / 数据质量）
+
+| # | 缺口 | 级别 | 一句话 |
+|---|---|---|---|
+| N1 | **打码对最常见几类凭据实际失效** | **高** | `privacy.cjs:16` 的关键词规则只吃到第一个空白/引号，`:18` 的长串阈值 48 位偏大，且无 URL userinfo 规则。**本地实测**（假值，只读调用 `redact()`）：`Authorization: Bearer <token>` → 只打掉 `Bearer`、**令牌原样保留**；`Authorization: Basic …`、`Cookie: sessionid=…`、`AWS_SECRET_ACCESS_KEY=<40位>`、`client_secret`、`https://user:pw@host/x.git`、`postgres://u:pw@host/db`、`sk_live_…`/`npm_…`/`AIza…`/`xoxb-…` **全部未打码**。能打掉的：`password=`/`api_key=`/`sk-…(≥16)`/`ghp_`/`AKIA`/`JWT`/≥48 位长串/反斜杠家目录路径。后果：一次失败的工具输出即可把真凭据带进 `inbox.md` / `details/` / `archive/` / `state.deferred[].excerpt` / 面板，并可能被归纳进 `entries/` 与 **`AGENTS.md` 自动段（注入本机每个会话）** |
+| N2 | **sidecar 写入未打码的会话日志绝对路径** | 中 | `engine.cjs:701` 直接拼 `${ev.file}`（`file` 由 `:179` 从批扫补入，是绝对路径），**从未经过 `redact`**——而 `privacy.cjs:22` 本来会把这类路径折叠成 `~`。现场核对：`archive/details/` **119 个文件中 92 个含 `C:\Users\<user>\.dsh\sessions\…`，共 99 处**；该文本还会经 `GET /whale/inbox/detail` **逐字节**返回浏览器 |
+| N3 | **8 个 `/whale/*` 端点无鉴权、无 Origin 校验（CSRF）** | 中 | 任意网页可对 `127.0.0.1:3080` 发起跨站 POST 产生**副作用**（删候选、触发扫描）；`readJsonBody` 不校验 `Content-Type`，`text/plain` 简单请求即可绕过预检（候选号空间仅 `C001–C999`，可被穷举把整箱移入归档）。实测带 `Origin: https://evil.example` 的 `POST /whale/scan` 返回 **200**。缓解：服务仅监听 127.0.0.1；且现代浏览器对「公网页 → 本机」请求有策略限制（Local/Private Network Access），可利用性依浏览器版本而定 |
+| N4 | **DNS rebinding：宿主路由层不校验 `Host`** | 中 | 根因在宿主半边（`dsh-host-webserver` 用字面量 base 解析 URL，`Host`/`Origin` 不参与路由），插件侧也无 Host 白名单 → 重绑定后可**以同源身份读到** `/whale/*` 全部数据（候选现象、工作区名、条目规则、sidecar 摘录）。修复正解是 Host 白名单（`Sec-Fetch-Site` 对同源重绑定无效），需宿主层配合 |
+| N5 | **`state.json` 并发「丢失更新」** | 中 | CLI 与宿主实时采集各自 `readState → 加工 → writeState`，无锁无版本号；`runScan` 读在 `engine.cjs:570`、写在 `645`，中间可能是**秒级**全量解码，窗口内 live flush 的指纹/水位线/暂存被整体覆盖。临时文件名固定 `<file>.tmp`，两写者相撞可致 `rename` ENOENT（异常被吞） |
+| N6 | **面板删除候选走非原子写** | 中 | `repo.cjs:120`（`removeInboxRows`）直接 `writeFileSync` 重写整个 `inbox.md`，未走同文件的 `writeInboxText`（102 行的 tmp+rename 原子路径）。该函数唯一调用者是面板 ✕（`server.cjs:131`）→ 中断/并发可**截断用户待审箱**。另：`appendInboxRows`（71）同样非原子，但当前**无调用者**；删除还是「先 append 归档 → 再重写 inbox」两步非事务 |
+| N7 | **`/whale/scan` 同步执行扫描** | 中 | `lib/index.js:166` 同步调用 `engine.runScan`，占用宿主事件循环：增量 ≈ 83–100ms 无感，但全量解码实测 **5084ms**（32 文件 / 44.43MB）——`settings.scanMode='full'` 或水位线失效时，点一次 ⟳ 面板与 GUI 一起卡住 |
+| N8 | **回声过滤仍有漏网（自我污染）** | 中 | 暂存 14 组中至少 7 组是采集器自身/本会话诊断输出（`state.json` 转储、`/whale/solved` 响应、`listEntries`/`clusters` 样本、编码探针），`META_STRONG/WEAK/DUMP` 三级签名对「通用转储 / 自家 API 响应」覆盖不足（`/whale/related` 的 `{"ok":true,"id":"C…"}` 形态不命中任何签名）。拉取式下只暂存、不打扰，但 `--add` 后会进待审箱 |
+| N9 | **detail sidecar 源会话行渲染 `undefined`** | 低 | 实时采集的事件不带 `file` 字段（批扫在 `engine.cjs:179` 才补上）→ `details/C128.md` 实测出现 `｜SandBox1｜undefined`；超长摘录的「完整错误见源日志 undefined」同理 |
+| N10 | **归档文件名按 UTC 日期、处置戳按本地时间** | 低 | `repo.cjs:126/135` 用 `toISOString()`（UTC）命名，`server.cjs:16` 的处置戳用本地时间 → UTC+8 环境 00:00–08:00 的归档会落到**前一天**的文件名里 |
+| N11 | **`state.json` 的 `files` 键是绝对路径（30 条）** | 低 | 打码层只处理「将要离开本机的文本」，水位线键不经 `redact` → 含用户名与工作区路径，与「个人路径不落盘」口径不一致（本机数据，不外泄） |
+| N12 | **`settings.familyThresholdSame/Cross` 未登记默认值** | 低 | `engine.cjs:109` 会读取，但 `schema.cjs` 的 `SETTINGS_DEFAULTS` 与本机 `settings.json` 均无这两个键（缺省走 `similarity.cjs` 的 0.6/0.8） |
+| N13 | **`links-doctor` 的 `cmd /c rmdir` 兜底存在窄条件注入** | 低 | `links-doctor.cjs:123` 把目录名直接交给 `cmd.exe`；若扫描根内存在**名字含 `&`/`^` 的悬空链接**且 `rmdirSync`/`unlinkSync` 都失败，`--apply` 时 `&` 之后会被当第二条命令执行（需本地已存在恶意目录名，非远程可利用） |
+| N14 | **sidecar 围栏 / 条目 frontmatter 可被内容闭合** | 低 | `engine.cjs:704` 的 ```` ```text ```` 围栏不中和内容里的 ` ``` `；`schema.cjs:69-79` 的 `title/symptom/…` 未做 YAML 转义（只有 `rule` 转义引号）→ 属**提示注入面**（无代码执行：全仓无 `eval`/`innerHTML`），触发需模型原样搬运原文 |
+| N15 | **面板「⚡ 自动处理」话术把日志派生文本标为「可信」并授权直接改** | 低（当前不可达） | `client.js:277/287` 的开场消息写「可信但已脱敏」+「按此纪律执行最小修改」；`AUTO_VISIBLE=false`（`:448`）使入口隐藏 → 一旦恢复应升级为中 |
+| N16 | **三处代码小瑕疵** | 低 | ① `lib/index.js:204` 注册日志只列 7 个端点，漏 `/whale/related`；② `client.js:447` 的 `alertTimer` 是死代码（只声明+clearTimeout，无赋值）；③ `client.js:510` 用了 `wh-foot-note`，CSS 里只有 `.wh-foot`（无对应规则） |
+| N17 | **数据目录 `README.md` 版本行仍写 `v0.7.0`** | 低 | `~/.dsh/whale-notebook/README.md:36` 是数据目录副本（71 行），与镜像根 `README.md`（119 行，写 0.7.3）内容不同、版本口径已分叉 |
+
+> **同时确认无问题的项**（避免「看起来没人查过」）：
+> ① **路径穿越不可达**——`^C\d{3}$` / `^E\d{3}$` 在 `server.cjs:50/102/110/118` 与 `repo.cjs:145/154/161` 双重校验，`readEntryText` 只按 `readdirSync` 结果前缀匹配 `path.join`，URL 解码后的 `../`、`%2e%2e%2f`、`%00`、盘符、UNC 一律不匹配；
+> ② **XSS 不可达**——全仓 `innerHTML|insertAdjacentHTML|outerHTML|document.write|eval(|new Function` 命中 **0**，面板渲染统一走 `textContent`/`createTextNode`（含条目全文、sidecar 全文、风险上报原文），`<style>` 亦经 `textContent` 注入；
+> ③ **无出站网络**——宿主侧 `lib/index.js` 与 `src/**` 无 `http/https/net/dns/tls` 调用；浏览器侧唯一的 `fetch` 全部是**同源相对路径** `/whale/*`，无绝对 URL、无埋点；`spawnSync` 只出现在生命周期/维护脚本与自测里；
+> ④ **不写工作区、不碰 git**——写入路径被 `repo.cjs:14-26` 钉死在 `~/.dsh/whale-notebook/**` 与 `~/.dsh/AGENTS.md`；同步脚本 `sync-release.cjs` 只镜像 `plugin/`、`docs/*.md`、`scripts/{mine,redact.test}.cjs`、`PROJECT-INTRO.md`，**`inbox/details/archive/entries` 永不进 git 仓库**；
+> ⑤ **表格结构不可破坏**——`schema.cjs:57` 的 `cell()` 把 `|` 转全角 `｜`，`summarize.cjs:24` 把现象压成单行；
+> ⑥ **归档可恢复、幂等**——删除＝移入当日归档（非销毁），未知编号不写盘，`removeInboxRows` 只按行首编号匹配；
+> ⑦ **单文件失败不致命**——解码失败按 `badFiles` 计数跳过（`engine.cjs:172/175`），半写帧不推进 offset 并置 `mtimeMs:-1` 强制下次重扫；
+> ⑧ **依赖面干净**——zstd 走 Node 内建 `node:zlib`，无第三方依赖、无子进程；`lifecycle/` 只依赖 node 内建；
+> ⑨ **审计对象即运行代码**——源码与 profile 部署副本 **SHA256 9/9 逐字节一致**（43 文件全量对账亦全同）。
+
+### 11.3 采集流水线与状态面深度审计（N18–N29）
+
+> 本节来自第二轮专项审计（`decoder → scanner → engine → repo` 全链读码 + 用真实归档数据在内存内复算），与 §11.2 是**同一批缺口清单的延续编号**。
+
+| # | 缺口 | 级别 | 一句话 |
+|---|---|---|---|
+| N18 | **归档「已处置」签名大面积失配** | **高** | `engine.cjs:69-73` 的兜底只弹「纯日期/时刻」列，遇到历史遗留的 8 列「空列」形态时尾部是空串，弹不动 → 现象文本被污染成 `… ｜ 2026-08-17 18:15 ｜ `。**本轮独立复算**：`archive-*.md` 共 130 行有处置列，其中 **82 行（63%）解析出的现象文本带时间尾巴**，其 `resolvedSig` 与聚簇文本永不相等 → `loadResolvedIndex()` 的 98 条签名里大量是死条目；另有 4 条签名带 `复发（原 C0xx）：` 前缀（readd 行 `engine.cjs:406-407`）同样永不匹配。**后果**：`--rebuild`/state 重置后，「已处置」守卫对这些坑失效 → 重复开行（正是 v0.6.2 想修的问题）。**加剧项**：实时路径 `live.cjs:75` 调 `ingestFresh` 时**没传 `resolved`**，重置后 live 撞见同内容会立刻开新行 |
+| N19 | **`state.json` 损坏/读失败 → 静默归零并覆盖** | **高** | `repo.cjs:28-30` 的 `catch { return def }` 把「非法 JSON」与「短暂读失败（占用/EACCES）」一视同仁地当成「空 state」，而同一次 `runScan` 会在 `engine.cjs:645` 把它落盘 → 水位线/指纹/聚簇/暂存**无备份地消失**，`nextCandidateId` 归 1 → 从 C001 重开、与 archive 撞号；`/whale/live` 只显示三个 0，**不报任何错误** |
+| N20 | **解码失败被静默吞掉，采集可静默停摆** | 中高 | `decoder.cjs:75-79` 对「文件末尾半写帧」与「已消费帧之后损坏」不区分，一律 `stopped` 且不推进 offset：前者是设计，后者意味着**该帧之后的日志永久不再被扫描**，而输出里只有「待重试 N」。更危险的是环境降级——`zstdDecompressSync` 需要 Node ≥22.15/23.8，若宿主进程 Node 偏旧则每帧都抛错 → **事件恒 0、退出码仍 0、打印「新发现 0 条」**，无人察觉（live 侧不读日志，完全无感） |
+| N21 | **`--rebuild` 会被实时采集整段回滚，却打印成功** | 中 | CLI 清空派生状态并写回（`engine.cjs:592-597/645`），期间任何一次 live flush（1.5s 一次）会把**旧** state 整体写回 → 重建被撤销，而 CLI 已经打印「已清空…从头梳理全部历史」。半清空中间态更糟：水位线推进而聚簇被清 → 历史坑因 `engine.cjs:168` 的跳过规则**永久漏采** |
+| N22 | **同一物理事件可能被 live 与批扫各计一次** | 中 | 指纹 `sid|at|hash36(cat|tool|body)`（`engine.cjs:32-39`）对时间/工具名/文本任一漂移都敏感；live 事件与落盘记录的 `time`、或 `tool` 退化成 `'?'` 时，同一事件被两个入口各开一行/各 bump 一次。现场线索：当日 echo 档里出现**逐字相同的两行**、各 `n=1`（说明是两批 ingest 各写一行）。正常时序下指纹能挡住第二次（有自测），触发条件是 N7/N19 叠加或指纹被 5000 上限淘汰后重扫 |
+| N23 | **编号跨过 C999 后一套功能静默失效** | 中 | `'C' + padStart(3)` 会产出 `C1000`，而 `repo.cjs:145/154/160` 与 `server.cjs:11` 全用 `^C\d{3}$` → 详情写入返回 `false`（调用方 `engine.cjs:415-418` 不检查返回值）、`/whale/inbox/detail`、`POST /whale/inbox/delete`、`/whale/related` 一律 400：面板看不到详情、删不掉候选。当前 `nextCandidateId=137`，一天多就走完 135 个 |
+| N24 | **资源增长无上限；echo 档自我放大（已实测）** | 中 | `clusters` 永不裁剪（唯一天空是 rebuild）；`details/` 无清理（入库流程用 `edit` 手改 inbox，不走 `removeInboxRows`，sidecar 永久留在 `details/`）；**echo 行本身命中 `META_DUMP`** → 用命令工具打印 echo 档的输出会被再判为回声、再追加一行（审计期间 `echo-20260911.md` 380B→938B）；`state.files` 占 state.json 65%（含 2541 条 callId→工具名映射）；live 的 `sessions` Map 单调增长 |
+| N25 | **可观测性缺口：半瘫不可见** | 中 | `lastError` 成功后不清（一直显示旧错）；`writeState` 持续失败时是「inbox 行在增、水位线/指纹不推进」的静默半瘫，面板看不到；`badFiles/retryPending/resets/dropped/suppressed` **都不落 state**，只在 CLI 文本或 `/whale/scan` 的一次性响应里出现 |
+| N26 | **`--prewarm --dry` 仍写盘** | 低 | `engine.cjs:629-632` 的 prewarm 分支**缺 `if (!o.dry)` 守卫**（对照 `:574`/`:645` 都有）→ 用户以为只是预览，实际水位线+指纹已落盘，这批候选被永久消费 |
+| N27 | **CLI 未知参数被静默忽略** | 低 | `cli.cjs:24,39,41` 不校验未知 flag：`--dray` 会被当成「非 dry」**真的写盘**且退出码 0；`exitCodeOf` 把所有 `ok:false` 判 2，未来新增非「前置缺失」类失败会误报 |
+| N28 | **死设置 `minOccurrences`** | 低 | `schema.cjs:36` 与现场 `settings.json` 都声明了「进箱最低出现次数」，但**全仓无任何读取点**（grep 仅命中默认值声明）→ 文档承诺的开关是空的；`checkEnabled` 也只影响 AGENTS 提醒文案（`agents.cjs:13`），不关采集 |
+| N29 | **TOCTOU：目录类读取无兜底** | 低 | `engine.cjs:139`（工作区 `readdirSync`）、`repo.cjs:194`（`entries/`）、`repo.cjs:65`（`inbox.md`）都无 try/catch，而同一层级的 `statSync`（`:136`）与单文件解码（`:172`）都有 → 会话目录被清理/被杀毒占用时，整轮扫描失败（CLI exit 1）或面板 500，而非跳过该项 |
+
+
+
 
 ---
 
@@ -484,7 +553,7 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 | 文件 | 一句话职责 |
 |---|---|
 | `plugin/lib/index.js` | 宿主半边装配：订阅 `session/event` + 注册 8 个 `/whale/*` 端点 |
-| `plugin/lib/client.js` | 浏览器半边：手写 `__ModuleLoader__` bundle，纯 DOM 悬浮双卡面板（1033 行） |
+| `plugin/lib/client.js` | 浏览器半边：手写 `__ModuleLoader__` bundle，纯 DOM 悬浮双卡面板（1037 行） |
 | `plugin/src/core/schema.cjs` | 领域契约：类别表 / scope / 设置默认 / AGENTS 标记 / 行与条目模板 |
 | `plugin/src/core/privacy.cjs` | **隐私唯一出口**：打码 / 指纹 / 规范文本 |
 | `plugin/src/core/similarity.cjs` | 骨架归一 + 3-gram 相似度 + 族判定（纯函数，可调阈值） |
@@ -493,7 +562,7 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 | `plugin/src/collector/scanner.cjs` | 事件判定 + 三级回声签名 + 跨窗口 callId→工具名 |
 | `plugin/src/collector/engine.cjs` | 水位线扫描 + 指纹/聚簇/族/复发 + 暂存 + 详情 sidecar（最大文件） |
 | `plugin/src/collector/live.cjs` | 实时采集器：去抖 1.5s、串行写盘、异常全吞、遵守拉取式 |
-| `plugin/src/collector/cli.cjs` | CLI 分发（10 个参数）；`scripts/mine.cjs` 为转发薄壳 |
+| `plugin/src/collector/cli.cjs` | CLI 分发（**9 个 flag**：5 个 MODE + `--render-rules` / `--wall` / `--full` / `--dry`）； `scripts/mine.cjs` 为转发薄壳（**位于包外** `~/.dsh/whale-notebook/scripts/`，不在 `plugin/scripts/` 内） |
 | `plugin/src/inject/agents.cjs` | AGENTS 自动段正文生成器（只收 `scope=global`）+ 标记区整段替换 |
 | `plugin/src/review/commit.cjs` | 计划式入库纯函数（`planCommit`），不写盘 |
 | `plugin/src/ui/viewmodel.cjs` | 待审/统计/已解决墙视图模型（UI 唯一数据入口） |
@@ -504,6 +573,8 @@ CLI 命令面（`scripts/mine.cjs` 是转发薄壳）：
 | `plugin/scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 + 插加载器行（幂等 + 字节对账） |
 | `plugin/scripts/links-doctor.cjs` | 悬空链接体检/清理（默认只读，exit 3 = 发现悬空） |
 | `PROJECT-INTRO.md` | 项目总览（路径地图 / 数据不变式 / 命令速查） |
+| `docs/2026_09_10_17_whale-notebookAB批次修复开发实施计划.md` | A/B 两批修复的实施计划与验收记录（S1–S8、T1–T9） |
+| `docs/2026_09_11_11_whale-notebook安全与健壮性审计报告.md` | 2026-09-11 复核审计：安全/健壮性/数据质量缺口、证据与修复优先级 |
 
 ---
 
