@@ -180,6 +180,8 @@
 
 ## 7. 修复优先级与建议路线
 
+> **实施进度（2026-09-11 当日回填）**：**P0 三项 + P2 中的四项已随 v0.7.4 实施完毕并验证**（源码与部署副本已 `deploy-web --apply`，宿主半边待重启 `dsh web`）；P1 与其余 P2 项仍未修，保留在下表。实施证据见本节末尾「实施记录」。
+
 ### P0（先做，直接影响隐私承诺与用户记忆完整性）
 
 | 序 | 修什么 | 改动面 | 验收判据 |
@@ -205,6 +207,20 @@
 非原子写统一（N6）· `--prewarm --dry` 守卫（N26）· CLI 未知 flag 报错（N27）· `minOccurrences` 落地或删除（N28）· 归档日期本地化（N10）· `state.files` 键去绝对路径（N11）· echo 档轮转与 `clusters` 上限（N24）· `details/` 孤儿对账（N24）· TOCTOU 统一兜底（N29）· `links-doctor` 去掉 `cmd` 兜底（N13）· 围栏/frontmatter 中和（N14）· `familyThreshold*` 登记进默认值（N12）· 三处代码小瑕疵（N16）与数据目录 README 版本行（N17）。
 
 > **P2 里的 N24（echo 自我放大）建议优先于其它 P2**：它是唯一一个**已被实测确认在发生**的增长型问题。
+
+### 实施记录（2026-09-11，v0.7.4）
+
+| 项 | 改动文件 | 验证证据 |
+|---|---|---|
+| **P0-1 打码补漏** | `src/core/privacy.cjs`（新增 4 组规则，置于旧规则之前；**不含凭据的文本输出逐字节不变**，普通文本指纹不漂移） | `privacy.selftest` 10→**23**、`redact.test` 13→**22**，含反证「凭据头后面的 URL 仍保留」「普通文本不出现 `[REDACTED]`」；实测 `Authorization: Bearer <假值>` 打码后不再出现假值 |
+| **P0-2 state 完整性** | `src/store/repo.cjs`（`readJsonStrict` / `tmpNameFor` / `statOf` / `mergeStates` / `writeState` CAS / `state.lock` 写锁）、`src/collector/engine.cjs`（`runScan` 加锁 + 前置检查前移）、`src/collector/live.cjs`（异步取锁，拿不到就把事件放回缓冲）、`src/ui/server.cjs`（面板删除持锁） | 新增 `src/store/repo.selftest.cjs` **23 断言**（严格读/损坏留证/临时名/CAS 合并/锁互斥与陈旧回收/编号下限）；真实环境 `mine.cjs --check` exit 0、state 保持 v2 且 `nextCandidateId=137` 未膨胀、无 `.tmp`/`.lock`/`.corrupt` 残留 |
+| **P0-3 归档签名修正** | `src/collector/engine.cjs`（剔空列 + 兜底补 `ARCHIVE_TIME_RE` + `resolvedSig` 归一化复发前缀 + `loadResolvedCached`）、`src/collector/live.cjs`（传索引） | 用**真实归档数据**复算：污染现象文本 **82/130（63%）→ 0/130**，死签名 0；`engine.dedup.selftest` 19→**24**、`live.selftest` 34→**35** |
+| 顺带 N2/N9 | `engine.cjs`（sidecar 源路径过 `redactLines`，实时来源退化为「（实时采集，无日志文件）」） | `engine.selftest` 10→**11**；实测 sidecar 内不再出现 `session.jsonl.zstd` |
+| 顺带 N23 | `repo.cjs` / `server.cjs` / `scanner.cjs`（`^C\d{3}$` → `^C\d{3,}$`） | 编号下限测试同时覆盖 4 位编号（repo.selftest ⑥） |
+| 顺带 N26 | `engine.cjs`（prewarm 分支补 `!o.dry` 守卫） | 并入 repo/engine 断言与 `--dry` 语义 |
+| 顺带 N6 | `repo.cjs`（`removeInboxRows` 改走 `writeInboxText` 原子路径） | `server.selftest` 50 断言全绿 |
+
+**口径变化（供文档同步）**：源码自检由 **9 套件 320 断言** 变为 **10 套件 363 断言**（新增 `src/store/repo.selftest.cjs` 23 条）；13 个测试文件 PASS 累计 **434**；`redact.test` 22。部署副本已 `deploy-web --apply`（`--check` exit 0），**宿主半边需重启 `dsh web` 生效**（`mine.cjs` 批扫立即生效）。
 
 ---
 

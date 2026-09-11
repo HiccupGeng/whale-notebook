@@ -27,5 +27,17 @@ check('quoted-file', redact('cannot write "C:\\demo\\proj\\docs\\a.md"'), '<path
 noLeak('real-pat-absent', redact('ok normal text with github token mention only'), 'github_pat');
 check('normal-cjk-kept', redact('命令行中文被破坏成 ???? 后写文件解决'), '????');
 
+// v0.7.4（安全审计 N1）：常见凭据形态全覆盖 —— 这几类在 v0.7.3 及之前全部漏网
+const FAKE = 'ZZFAKEVALUEZZFAKEVALUE';
+noLeak('bearer-no-leak', redact('curl -H "Authorization: Bearer ' + FAKE + '" https://api.example.com'), FAKE);
+noLeak('basic-no-leak', redact('Authorization: Basic ' + FAKE), FAKE);
+noLeak('cookie-no-leak', redact('Cookie: sessionid=' + FAKE + '; csrftoken=' + FAKE), FAKE);
+noLeak('aws-secret-no-leak', redact('AWS_SECRET_ACCESS_KEY=' + 'A'.repeat(40)), 'A'.repeat(40));
+noLeak('client-secret-no-leak', redact('{"client_secret":"' + FAKE + '"}'), FAKE);
+noLeak('url-userinfo-no-leak', redact('fatal: could not read from https://user:' + FAKE + '@github.com/r.git'), FAKE);
+noLeak('dsn-password-no-leak', redact('postgres://admin:' + FAKE + '@10.0.0.5:5432/db failed'), FAKE);
+noLeak('stripe-no-leak', redact('sk_live_' + 'A'.repeat(24)), 'A'.repeat(24));
+check('bearer-url-kept', redact('curl -H "Authorization: Bearer ' + FAKE + '" https://api.example.com'), 'https://api.example.com');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -8,8 +8,10 @@ const repo = require('../store/repo.cjs');
 const { inboxViewModel, solvedViewModel } = require('./viewmodel.cjs');
 const { similarity, DEFAULT_THRESHOLDS } = require('../core/similarity.cjs');
 
-const ID_RE = /^C\d{3}$/;
-const EID_RE = /^E\d{3}$/;
+// v0.7.4（审计 N23）：编号允许 3 位以上 —— 原来 `^C\d{3}$` 在编号过 999 后
+//   会让详情写入静默失败、/whale/inbox/detail 与 /whale/inbox/delete 一律 400（面板删不掉候选）。
+const ID_RE = /^C\d{3,}$/;
+const EID_RE = /^E\d{3,}$/;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 // 本地时间 'YYYY-MM-DD HH:mm'（+08 环境下的用户可读处置戳）
@@ -114,6 +116,8 @@ function detailPayload(id) {
 }
 
 // POST /whale/inbox/delete { id }：返回 {ok} 或 {ok:false, error}；未知编号不写盘（幂等安全）
+// v0.7.4（审计 N5）：与 CLI 扫描/实时采集用同一把写锁 —— inbox.md 是读-改-写，
+//   面板删除若与扫描并发，两边都会丢对方刚写的内容；拿不到锁就明说"请稍后重试"，不硬写。
 function deleteCandidate({ id, now }) {
   if (!ID_RE.test(id)) return { ok: false, error: `非法编号: ${id}（应为 C###）` };
   const text = repo.readInboxText();
@@ -122,15 +126,21 @@ function deleteCandidate({ id, now }) {
     if ((l.match(/^\| (C\d+) /) || [])[1] === id) { line = l; break; }
   }
   if (line === null) return { ok: false, error: `inbox 中不存在候选 ${id}` };
-  ensureArchiveDir();
-  const stamp = localStamp(now || new Date());
-  // 归档行 = 候选原文（去掉行尾 `|`）+ 处置列，严格对齐 archive-*.md 的 7 列表头
-  // v0.7.3 修复：inbox 行本身以 `|` 结尾，旧写法直接续上 ` | 面板删除 …` → 表格多出一列、
-  // 处置列显示为空、时间戳被挤到第 8 列（与入库路径 commit.cjs 写出的 7 列行不一致）。
-  repo.archiveInboxRows(`${line.replace(/\s*\|?\s*$/, '')} | 面板删除 ${stamp} |`);
-  const { removed } = repo.removeInboxRows([id]);
-  if (removed !== 1) return { ok: false, error: `写入失败：${id} 未能从 inbox 移除` };
-  return { ok: true, removed, id, archived: true };
+  const release = repo.acquireLockSync(800);
+  if (!release) return { ok: false, error: '采集正在写入（写锁忙），请稍后重试删除' };
+  try {
+    ensureArchiveDir();
+    const stamp = localStamp(now || new Date());
+    // 归档行 = 候选原文（去掉行尾 `|`）+ 处置列，严格对齐 archive-*.md 的 7 列表头
+    // v0.7.3 修复：inbox 行本身以 `|` 结尾，旧写法直接续上 ` | 面板删除 …` → 表格多出一列、
+    // 处置列显示为空、时间戳被挤到第 8 列（与入库路径 commit.cjs 写出的 7 列行不一致）。
+    repo.archiveInboxRows(`${line.replace(/\s*\|?\s*$/, '')} | 面板删除 ${stamp} |`);
+    const { removed } = repo.removeInboxRows([id]);
+    if (removed !== 1) return { ok: false, error: `写入失败：${id} 未能从 inbox 移除` };
+    return { ok: true, removed, id, archived: true };
+  } finally {
+    release();
+  }
 }
 
 module.exports = { ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate, solvedPayload, entryPayload, relatedPayload };

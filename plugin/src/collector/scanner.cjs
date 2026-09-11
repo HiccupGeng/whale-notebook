@@ -33,7 +33,7 @@ const STRONG_USER = /编码|乱码|报错|失败|坑|EPERM|拒绝|超时|token|�
 //   ① 简报技能自己的扫描输出（sessions:/workspaces:/### WORKSPACE:/filesWritten:/recentFiles:/real user msgs:/user: N | asst: N）
 //   ② DSH 源码与 profile 摘录（行号前缀 `361: …`、YAML 片段 `- id: …`）
 //   ③ zstd 十六进制转储（连续 ≥8 个 hex 字节对）
-const META_STRONG = /whale-notebook|mine\.cjs|inbox\.md|details[\\/]C\d{3}|\[dry 只读\]|新发现 \d+ 条|待审共|byCat|byTool|ENC_DIAG|SELF_REF|(?:collector|scanner|decoder|patterns|engine|live|summarize|repo|agents|schema|server|cli)\.(?:selftest\.)?c?js|bundle-smoke|deploy-web|sync-release|clusterKey|fpOf|ingestFresh|AUTO_VISIBLE|frame layout|endNL=|P1-start|FULL FAILING COMMAND|variant A|ContentType without charset|hex:E4|提交详情|本地核对|远程库元信息|dsh-global-rules|fetch upstream main|real scanner|patched copy|### WORKSPACE:|filesWritten:|recentFiles:|real user msgs:|^\s*\d{1,5}: \S|(?:\b[0-9A-Fa-f]{2}\b[ ]){7,}/im;
+const META_STRONG = /whale-notebook|mine\.cjs|inbox\.md|details[\\/]C\d{3,}|\[dry 只读\]|新发现 \d+ 条|待审共|byCat|byTool|ENC_DIAG|SELF_REF|(?:collector|scanner|decoder|patterns|engine|live|summarize|repo|agents|schema|server|cli)\.(?:selftest\.)?c?js|bundle-smoke|deploy-web|sync-release|clusterKey|fpOf|ingestFresh|AUTO_VISIBLE|frame layout|endNL=|P1-start|FULL FAILING COMMAND|variant A|ContentType without charset|hex:E4|提交详情|本地核对|远程库元信息|dsh-global-rules|fetch upstream main|real scanner|patched copy|### WORKSPACE:|filesWritten:|recentFiles:|real user msgs:|^\s*\d{1,5}: \S|(?:\b[0-9A-Fa-f]{2}\b[ ]){7,}/im;
 const META_WEAK = [
   /cordis/i, /plugin-group/i, /dsh-host-webserver/i, /ctx\.router/i, /dump-config/i,
   /session\.jsonl\.zstd/i, /frames=\d+/, /midLineFrames/i, /gbk decode/i, /utf8 parse OK/i,
@@ -47,7 +47,7 @@ const META_WEAK = [
   /\bsessions: \d+/i, /\bworkspaces: \d+/i, /\buser: \d+ \| asst: \d+/i, /\basst: \d+/i,
   /disabled: true/, /- id: /i, /service-unavailable/i, /\bbyCat\b/i,
   // v0.6.2 二次：候选编号 / 探针输出抬头（如「命中 2 条：--- C030 | model-api | …」这类自查输出）
-  /\bC\d{3}\b/, /命中 \d+ 条/, /摘录[:：]/, /正则自检/, /候选详情/,
+  /\bC\d{3,}\b/, /命中 \d+ 条/, /摘录[:：]/, /正则自检/, /候选详情/,
 ];
 // v0.7.1 补漏：「转储/回显」型回声 —— 工具结果里把历史记录重新渲染出来的那类输出
 // 实测漏网：为复核某个旧候选而跑的解码/转储脚本，输出是「转储信封 + 旧失败原文」，
@@ -60,7 +60,7 @@ const META_WEAK = [
 // v0.7.1 修正（实测踩到）：③ **不能带 `^` 行首锚** —— 成功路径会先把输出压成单行
 //   （`raw.replace(/\s+/g, ' ')`），带锚则永远匹配不到（实测：打印 echo 归档行的命令输出照样进暂存）。
 //   故三条表行判据一律不锚定；「时间戳行」额外要求后随**类别词**，免得误伤普通表格。
-const META_DUMP = /={3,}\s*L\d+\s+(?:tool|assistant|user|session|step|reasoning|text|permission|approval|sandbox|command|todo)[/-]|\bkind=(?:tool|assistant|user|step|session|permission|approval|sandbox|command)[/-]|\btype=(?:tool|assistant|user|step|session)[/-]|\\?"type\\?":\\?"(?:tool\/result|tool\/call|assistant\/(?:message|chunk)|user\/message|reasoning-chunks|text-chunks|tool-call-chunks|step\/(?:start|end)|session|command\/(?:run|done))\\?"|\|\s*C\d{3}\s*\|[^|\n]*\|[^|\n]*\|[^|\n]*\||\|\s*E\d{3}\s*\|[^|\n]*\|[^|\n]*\||\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|\s*(?:encoding|stale-fs|sandbox-[a-z-]+|approval|tool-mode|git-net|secret|session-state|data-access|long-session|timeout|model-api|file-missing|port-busy|error|other)\s*\|/;
+const META_DUMP = /={3,}\s*L\d+\s+(?:tool|assistant|user|session|step|reasoning|text|permission|approval|sandbox|command|todo)[/-]|\bkind=(?:tool|assistant|user|step|session|permission|approval|sandbox|command)[/-]|\btype=(?:tool|assistant|user|step|session)[/-]|\\?"type\\?":\\?"(?:tool\/result|tool\/call|assistant\/(?:message|chunk)|user\/message|reasoning-chunks|text-chunks|tool-call-chunks|step\/(?:start|end)|session|command\/(?:run|done))\\?"|\|\s*C\d{3,}\s*\|[^|\n]*\|[^|\n]*\|[^|\n]*\||\|\s*E\d{3,}\s*\|[^|\n]*\|[^|\n]*\||\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|\s*(?:encoding|stale-fs|sandbox-[a-z-]+|approval|tool-mode|git-net|secret|session-state|data-access|long-session|timeout|model-api|file-missing|port-busy|error|other)\s*\|/;
 
 function isMetaEcho(text) {
   const s = String(text == null ? '' : text);

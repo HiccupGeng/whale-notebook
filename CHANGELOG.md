@@ -1,7 +1,39 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.3`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.4`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+
+## v0.7.4（2026-09-11）安全审计 P0 三项：打码补漏 · 状态文件完整性 · 归档签名修正
+
+**起因**：对 v0.7.3 做了一次三路只读审计（安全/隐私面、采集流水线健壮性、文档与代码一致性），共记录 29 项缺口（详见 `docs/2026_09_11_11_whale-notebook安全与健壮性审计报告.md`）。本版修其中**三项高危**（P0）＋ 四项顺带小修，全部带回归断言。
+
+### ① 打码对最常见几类凭据失效（`src/core/privacy.cjs`）
+
+**问题**：关键词规则的值部分 `[^"',;\s]{6,}` 不能跨空格 —— `Authorization: Bearer <token>` 只吃掉 `Bearer`，**令牌落在匹配之外**；`\bsecret\b` 在下划线标识符里没有词边界，`AWS_SECRET_ACCESS_KEY` / `client_secret` 整类漏网；长串兜底阈值 48 放过 40 位 AWS secret 与 `sk_live_`/`xoxb-`/`npm_`/`AIza`；完全没有 URL 内凭据规则。实测（假值直调 `redact()`）这些形态**全部原样落进** `inbox.md` / `details/` / `archive/` / `state.deferred[].excerpt`，并经 `/whale/inbox/detail` 逐字节返回浏览器。
+**修法**：新增四组规则并置于旧规则之前 —— ① 认证头打码（`authorization`/`cookie`，值吃到行尾或下一个引号，**保留同一行后面的 URL**）；② URL 内凭据 → `scheme://[REDACTED]@`；③ 已知前缀令牌（Stripe / Slack / npm / Google / GitHub app / GitLab / SendGrid）；④「密钥名 = 值」（**去掉 `\b`**，支持 JSON 的 `":"` 形态与引号值）。**不含凭据的文本输出逐字节不变**，故普通文本的 `canonText`/指纹不漂移。
+**自检**：`privacy.selftest` +13、`redact.test` +9，含反证「凭据头后面的 URL 仍保留」「普通文本不出现 `[REDACTED]`」。
+
+### ② `state.json` 损坏即静默归零并覆盖（`src/store/repo.cjs`）
+
+**问题**：`readJson` 的 `catch` 把「非法 JSON」「文件被占用」「权限不足」一律当成「读不到 → 用空状态」，而同一次 `runScan` 会把空状态落盘 → 水位线/指纹/聚簇/暂存**无备份消失**，`nextCandidateId` 归 1 → 从 C001 重开并与归档撞号；`/whale/live` 只显示三个 0，**不报任何错误**。
+**修法**：① `readState` 改走**严格读**：只有 `ENOENT` 算「没有历史」，其余抛错；内容损坏先把文件改名 `state.json.corrupt-<ts>` 留证再抛；② 临时文件名带 `pid + 序号`（`state.json.<pid>.<n>.tmp`，`inbox.md` / `details/C###.md` 同款）—— 两个进程不再互踩同一个 `.tmp`；③ `writeState` 前 **CAS 比对 `size+mtimeMs`**，变了就把磁盘那份**并集合并**后重放（水位线取更靠前、聚簇/暂存并集取大计数、指纹并集、编号取 max、`lastScan` 取 max）；④ 新增 **`state.lock` 跨进程写锁**（`wx` 原子创建、>15s 陈旧锁可回收、`EEXIST` 才等待），CLI 扫描 / 实时 flush / 面板删除共用（实时侧拿不到锁会把事件放回缓冲，绝不带风险写盘）；⑤ **编号下限** = `max(state, 在箱最大, 归档最大+1)`。
+**自检**：新增 `src/store/repo.selftest.cjs`（23 断言）。
+
+### ③ 归档「已处置」签名 63% 失配（`src/collector/engine.cjs` + `live.cjs`）
+
+**问题**：历史遗留的 8 列「空列」形态（`… | 现象 | 时间 |  | 处置 |`）让 `parts[last-1]` 变成空串 → 兜底循环第一轮就停住 → 时间被并进现象文本；而时间列是**整列** `YYYY-MM-DD HH:mm`，只认 `^\d{4}-\d{2}-\d{2}$` 也弹不掉。**实测复算：130 行归档里 82 行（63%）签名永久失配** → `--rebuild` 或 state 重置后，这些"已处置"的坑会被重新开行。另有第二类死签名：复发行现象列的 `复发（原 C0xx）：` 前缀；且**实时采集路径压根没传 `resolved` 索引**（重置后撞见同内容会立刻开新行，与 CLI 行为不一致）。
+**修法**：① 现象列先**剔空列**再走兜底循环，兜底判据补 `ARCHIVE_TIME_RE`；② `resolvedSig` 归一化掉复发前缀（索引构建与在箱剔除两端同时生效）；③ 新增 `loadResolvedCached()`（按 `archive-*.md` 的 name/size/mtime 缓存索引与归档最大编号）供实时路径使用；④ `live.cjs` 每次 flush 传入该索引。
+**自检**：`engine.dedup.selftest` +5、`live.selftest` +1；复算脚本「污染行数」由 82 → 0。
+
+### 顺带修复（同批审计的低危项）
+
+- **sidecar 泄露会话日志绝对路径**（`engine.cjs`）：源引用行原来直接拼 `${ev.file}`，实测 119 个归档 sidecar 里 92 个含用户名与目录结构；现过 `redactLines`（折叠为 `<path>`）。同时修掉**实时来源无 `file` 字段时输出字面 `undefined`**（改为「（实时采集，无日志文件）」）。
+- **编号放宽 `^C\d{3,}$`**（`repo.cjs` / `server.cjs` / `scanner.cjs`）：编号过 999 后原来会导致 sidecar 写入静默失败、详情与删除端点一律 400。
+- **`--prewarm --dry` 零写盘**（`engine.cjs`）：prewarm 分支此前缺 `--dry` 守卫。
+- **面板删除改原子写**（`repo.cjs`）：`removeInboxRows` 原来直接 `writeFileSync` 重写 inbox，现与其它路径统一走 tmp+rename。
+
+**验证**：10 套件 **363 PASS / 0 FAIL**（lifecycle 104 · server 50 · privacy 23 · summarize 10 · similarity 20 · repo 23 · engine 11 · engine.dedup 24 · e2e 63 · live 35）＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 —— 13 个测试文件 PASS 累计 **434**，全绿（2026-09-11）。
+**生效**：改动含宿主半边（`lib/index.js`、`src/**`）→ **先 `deploy-web --apply`，再重启 `dsh web`**；`mine.cjs` 增量批扫与 `--stats` 立即生效。
 
 ## v0.7.3（2026-09-10）讨论落点路由 · 类别展示契约 · CLI 退出码
 
@@ -128,14 +160,15 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 | 套件 | 断言数 |
 |---|---|
 | `plugin/lifecycle/selftest.cjs` | 104 |
-| `plugin/src/ui/server.selftest.cjs` | 45 |
-| `plugin/src/core/privacy.selftest.cjs` | 10 |
+| `plugin/src/ui/server.selftest.cjs` | 50 |
+| `plugin/src/core/privacy.selftest.cjs` | 23 |
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
-| `plugin/src/collector/engine.selftest.cjs` | 10 |
-| `plugin/src/collector/engine.dedup.selftest.cjs` | 19 |
-| `plugin/src/collector/e2e.selftest.cjs` | 60 |
-| `plugin/src/collector/live.selftest.cjs` | 28 |
-| **合计** | **306**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 13 断言） |
+| `plugin/src/store/repo.selftest.cjs` | 23 |
+| `plugin/src/collector/engine.selftest.cjs` | 11 |
+| `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
+| `plugin/src/collector/e2e.selftest.cjs` | 63 |
+| `plugin/src/collector/live.selftest.cjs` | 35 |
+| **合计** | **363**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **434**） |
 
-最近一次全绿：**2026-09-10**。
+最近一次全绿：**2026-09-11**（v0.7.4）。

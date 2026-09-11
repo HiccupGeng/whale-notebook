@@ -45,8 +45,13 @@ function fpOf(ev, key) {
 //   摘要法：聚簇一句话文本被 oneLiner(…,90) 截断（JS slice 按 UTF-16 单元），
 //   归档行文本 ≤120 字符，故把归档文本同样按 90 截断后比较前缀即可稳定匹配。
 const SIG_TEXT_MAX = 90;
+// v0.7.4（审计 N18）：复发行在现象列里带「复发（原 C0xx）：」前缀，而聚簇文本不带前缀
+//   → 归档后签名永远对不上。归一化放在 resolvedSig 里，索引构建与在箱剔除两端同时生效。
+const READD_PREFIX_RE = /^复发（原 C\d+）：\s*/;
 function resolvedSig(cat, text) {
-  const body = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, SIG_TEXT_MAX);
+  const body = String(text == null ? '' : text)
+    .replace(READD_PREFIX_RE, '')
+    .replace(/\s+/g, ' ').trim().slice(0, SIG_TEXT_MAX);
   return body ? `${cat}|${body}` : '';
 }
 // 归档行形态（实测 99 行里只有 2 行能按固定列数解析）：历史渲染过两轮 ——
@@ -67,10 +72,17 @@ function parseArchiveRow(line) {
   const hasTime = ARCHIVE_TIME_RE.test(parts[last - 1]);
   // 现象列 = [4, end)：有「时间」列时 end 指向它（last-1），否则 end 指向处置列（last）
   const end = hasTime ? last - 1 : last;
-  const mid = parts.slice(4, Math.max(4, end));
-  // 兜底：早期行把时间写成 `日期|时刻` 两列（含无处置列的旧行），尾部纯日期/时刻列一律切掉，
+  // v0.7.4（审计 N18）：历史遗留的 8 列「空列」形态（旧版面板删除直接续写 `|` 造成）
+  //   会让 parts[last-1] 变成空串 → hasTime=false → 尾部是空串，下面的 while 第一轮就停住
+  //   → 时间被并进现象文本，签名永久失配。**先剔空列**，while 才能把时间列正常弹掉。
+  const mid = parts.slice(4, Math.max(4, end)).filter((s) => s !== '');
+  // 兜底：尾部纯「日期/时刻/日期+时刻」列一律切掉（无处置列的旧行、日期与时刻拆两列的行），
   // 否则时间会被并进现象文本、与引擎聚簇文本不一致，签名永远对不上。
-  while (mid.length > 1 && (/^\d{4}-\d{2}-\d{2}$/.test(mid[mid.length - 1]) || /^\d{2}:\d{2}$/.test(mid[mid.length - 1]))) mid.pop();
+  // v0.7.4：判据补 ARCHIVE_TIME_RE —— 8 列空列形态里时间是一整列 `YYYY-MM-DD HH:mm`，
+  // 只认 `^\d{4}-\d{2}-\d{2}$` 会漏掉它（这正是 63% 归档行签名失配的直接原因）。
+  while (mid.length > 1 && (ARCHIVE_TIME_RE.test(mid[mid.length - 1])
+    || /^\d{4}-\d{2}-\d{2}$/.test(mid[mid.length - 1])
+    || /^\d{2}:\d{2}$/.test(mid[mid.length - 1]))) mid.pop();
   const text = mid.join(' | ');
   return { id, cat: parts[1], ws: parts[3], text, disposition, hasTime };
 }
@@ -89,6 +101,49 @@ function loadResolvedIndex(dir) {
     }
   }
   return index;
+}
+
+// v0.7.4（审计 N18/N19）：归档「已处置索引 + 最大编号」的 mtime 缓存。
+//   实时采集每次 flush 都要用（原来根本没传），不能每轮重读 20–30KB 归档；
+//   目录内 archive-*.md 的 (name,size,mtime) 拼成 key，变了才重建。
+const archiveCache = { key: null, index: new Set(), maxId: 0 };
+function statSafe(p) {
+  try { const st = fs.statSync(p); return { size: st.size, mtimeMs: st.mtimeMs }; }
+  catch { return { size: -1, mtimeMs: -1 }; }
+}
+function archiveCacheKey() {
+  let names;
+  try { names = fs.readdirSync(repo.P.archive); } catch { return ''; }
+  let key = '';
+  for (const name of names.slice().sort()) {
+    if (!/^archive-.*\.md$/.test(name)) continue;
+    const st = statSafe(path.join(repo.P.archive, name));
+    key += `${name}:${st.size}:${st.mtimeMs};`;
+  }
+  return key;
+}
+function loadResolvedCached() {
+  const key = archiveCacheKey();
+  if (archiveCache.key !== null && archiveCache.key === key) return archiveCache;
+  const index = loadResolvedIndex();
+  let maxId = 0;
+  let names = [];
+  try { names = fs.readdirSync(repo.P.archive); } catch { /* 无归档目录：maxId 保持 0 */ }
+  for (const name of names) {
+    if (!/^archive-.*\.md$/.test(name)) continue;
+    let text; try { text = fs.readFileSync(path.join(repo.P.archive, name), 'utf8'); } catch { continue; }
+    // 编号扫描用宽松判据（不依赖整行能否解析）——畸形行也占过编号，必须计入下限，否则会撞号
+    for (const line of text.split('\n')) {
+      const m = String(line).match(/^\|\s*(C\d+)\s*\|/);
+      if (!m) continue;
+      const n = parseInt(m[1].slice(1), 10);
+      if (Number.isFinite(n) && n > maxId) maxId = n;
+    }
+  }
+  archiveCache.key = key;
+  archiveCache.index = index;
+  archiveCache.maxId = maxId;
+  return archiveCache;
 }
 
 // v0.6.2：已开行（在箱/已处置）的聚簇，其复发窗口已随风干 — 从索引里剔除，可重新开行。
@@ -253,6 +308,12 @@ function ingestFresh(rawEvents, state, settings, opts) {
   const inboxOld = repo.readInboxText();
   const pendRows = repo.parseInboxRows(inboxOld);
   const pendIds = new Set(pendRows.map((r) => r.id));
+  // v0.7.4（审计 N19 连带）：编号下限 = max(state, 在箱最大编号+1, 归档最大编号+1)。
+  //   state 被清空/重置时 nextCandidateId 会归 1 —— 不拿归档兜底就会与历史编号撞号，
+  //   之后面板按编号查详情/删除会命中上一轮的同号候选。
+  const maxPendId = pendRows.reduce((m, r) => Math.max(m, parseInt(String(r.id).slice(1), 10) || 0), 0);
+  const archived = loadResolvedCached();
+  state.nextCandidateId = Math.max(state.nextCandidateId || 1, maxPendId + 1, (archived.maxId || 0) + 1);
   // 自愈：v0.4 时代的候选没有簇索引，同类别+同现象列时认领为同一聚簇（避免升级后第一次复发变重复行）
   const adoptBy = new Map();
   for (const r of pendRows) {
@@ -561,8 +622,25 @@ function recurrenceNote(a, c, now) {
 }
 
 // mode: '--check'(默认) | '--add' | '--prewarm' | '--stats'；opts: { full, dry }
+// v0.7.4（审计 N5）：写路径互斥 —— CLI 扫描与宿主实时采集写同一批文件（state.json / inbox.md），
+//   没有互斥就会互相覆盖（丢失更新、同号两行、--rebuild 被整段回滚）。
+//   `--dry` 与 `--stats` 是纯只读，不加锁。锁超时则明确失败（exit 码由 CLI 置 1），不静默继续。
 function runScan(mode, opts) {
   const o = opts || {};
+  // 前置检查放在加锁之前：数据目录/会话根缺失时应当报"前置缺失"（CLI 退出码 2），
+  // 而不是"锁忙" —— 数据目录不存在时连锁文件都建不出来。
+  if (!fs.existsSync(repo.P.sessions)) return { ok: false, text: 'no sessions root' };
+  if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
+  const willWrite = o.dry !== true && mode !== '--stats';
+  const release = willWrite ? repo.acquireLockSync(1500) : null;
+  if (willWrite && !release) {
+    return { ok: false, text: `写入锁不可用（${repo.stateDiag.lastLockError || 'timeout'}；另一个采集进程正在扫描或写盘），请稍后重试` };
+  }
+  try { return runScanInner(mode, o); }
+  finally { if (release) release(); }
+}
+
+function runScanInner(mode, o) {
   const t0 = Date.now();
   if (!fs.existsSync(repo.P.sessions)) return { ok: false, text: 'no sessions root' };
   if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
@@ -629,7 +707,7 @@ function runScan(mode, opts) {
   if (mode === '--prewarm') {
     const consumed = markSeen(state, scan.events, Number.isFinite(settings.maxFingerprints) ? settings.maxFingerprints : DEFAULT_MAX_FINGERPRINTS);
     state.lastScan = Date.now();
-    repo.writeState(state);
+    if (!o.dry) repo.writeState(state); // v0.7.4（审计 N26）：--prewarm --dry 必须零写盘
     const ms = Date.now() - t0;
     return {
       ok: true,
@@ -698,11 +776,19 @@ function buildDetailMd(cid, r) {
   L.push(`- 类别：${r.cat}｜次数：${r.n}｜工作区：${[...r.wsSet].slice(0, 2).join(',')}｜首次：${fmtTime(r.first)}｜最近：${fmtTime(r.last)}`);
   if (r.origin) L.push(`- 复发：原候选 ${r.origin}（已处置）后再次出现，本行是重开的候选`);
   L.push(`- 源会话（最近 ${srcList.length} 个）：`);
-  for (const ev of srcList) L.push(`  - ${ev.sid} @ ${fmtTime(ev.at)}｜${ev.ws}｜${ev.file}`);
+  // v0.7.4（审计 N2/N9）：ev.file 是会话日志的绝对路径，必须过打码 ——
+  //   原来直接拼进 sidecar，实测 119 个归档 sidecar 里 92 个含用户名与目录结构；
+  //   实时采集的事件没有 file 字段（批扫在 scanHistory 才补），此时退回工作区名而不是输出 undefined。
+  for (const ev of srcList) {
+    const src = ev.file
+      ? redactLines(String(ev.file)).replace(/\s*\n+\s*/g, ' ')
+      : `${ev.ws || '?'}（实时采集，无日志文件）`;
+    L.push(`  - ${ev.sid} @ ${fmtTime(ev.at)}｜${ev.ws}｜${src}`);
+  }
   L.push(`- 错误摘录（已打码，上限 ${DETAIL_EXCERPT_MAX} 字）：`);
   L.push('');
   L.push('```text');
-  if (excerpt.length > DETAIL_EXCERPT_MAX) L.push(excerpt.slice(0, DETAIL_EXCERPT_MAX) + `\n…（截断：完整错误见源日志 ${best.file}）`);
+  if (excerpt.length > DETAIL_EXCERPT_MAX) L.push(excerpt.slice(0, DETAIL_EXCERPT_MAX) + `\n…（截断：完整错误见源日志 ${best && best.file ? redactLines(String(best.file)).replace(/\s*\n+\s*/g, ' ') : '<path>'}）`);
   else L.push(excerpt || '（无摘录文本）');
   L.push('```');
   L.push('');
@@ -713,6 +799,8 @@ module.exports = {
   runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
   // v0.6.2：已处置签名索引（防重置后重扫重复开行）
   resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
+  // v0.7.4：归档索引 + 最大编号的 mtime 缓存（实时采集与编号下限共用）
+  loadResolvedCached, READD_PREFIX_RE,
   // v0.7：族（同坑不同变体）—— 复用 state.clusters（同 cid 即同族）
   familyList, familyThresholds, familyNote,
 };

@@ -7,7 +7,7 @@
 //   每轮 flush 现读 state.json 再写回，避免覆盖 CLI 批扫刚建立的水位线。
 'use strict';
 const repo = require('../store/repo.cjs');
-const { ingestFresh } = require('./engine.cjs');
+const { ingestFresh, loadResolvedCached } = require('./engine.cjs');
 const { classifyRecord, newSessionCtx } = require('./scanner.cjs');
 
 const DEFAULT_FLUSH_MS = 1500;        // 去抖：一波重试合并成一次入库
@@ -59,40 +59,58 @@ function createLiveCollector(opts) {
     }
   }
 
-  function flush() {
+  function flush(waitMs) {
     if (timer) { clearTimeout(timer); timer = null; }
     if (!buffer.length) return chain;
     const batch = buffer;
+    const lockWait = Number.isFinite(waitMs) ? waitMs : 5000;
     buffer = [];
     chain = chain
-      .then(() => {
+      .then(async () => {
         const settings = repo.readSettings();
         if (settings.autoCollect === false || settings.liveCapture === false) {
           stats.skipped += batch.length;
           return null;
         }
-        const state = repo.readState(); // 现读现写
-        const ing = ingestFresh(batch, state, settings, { now: Date.now(), maxNewRows });
-        repo.writeState(state);
-        stats.flushes++;
-        stats.lastFlushAt = Date.now();
-        stats.added += ing.added.length;
-        stats.bumped += ing.bumped.length;
-        stats.silent += ing.silent.length;
-        stats.dropped += ing.dropped || 0;
-        stats.echoGroups += ing.echo || 0;
-        stats.echoEvents += ing.echoEvents || 0;
-        stats.deferredGroups += (ing.deferred || []).length;
-        stats.deferredEvents += (ing.deferred || []).reduce((n, d) => n + d.n, 0);
-        if (ing.added.length) {
-          log.info(`[whale-notebook] 实时入箱 +${ing.added.length} 条（${ing.added.map((a) => a.id).join(',')}）｜待审共 ${ing.pending}`);
-        } else if (ing.deferredOn && (ing.deferred || []).length) {
-          // v0.6 拉取式：只暂存，不写待审箱（用户「小本本复盘」时才入箱）
-          log.debug(`[whale-notebook] 实时暂存 +${ing.deferred.length} 组（暂存共 ${ing.deferredTotal} 组，未入箱）`);
-        } else if (ing.bumped.length) {
-          log.debug(`[whale-notebook] 实时累加 ${ing.bumped.map((b) => b.id).join(',')}`);
+        // v0.7.4（审计 N5）：与 CLI 扫描 / 面板删除互斥（它们持有同一把锁）。
+        //   拿不到锁就把这批事件放回缓冲，下一轮再试 —— 绝不带着"可能被覆盖"的状态去写盘。
+        const release = await repo.acquireLock(lockWait);
+        if (!release) {
+          buffer = batch.concat(buffer);
+          stats.lockBusy = (stats.lockBusy || 0) + 1;
+          log.warn(`[whale-notebook] 写入锁忙，本轮实时入库推迟（${buffer.length} 条事件留在缓冲）`);
+          return null;
         }
-        return ing;
+        try {
+          const state = repo.readState(); // 现读现写（writeState 内部还有 CAS 合并兜底）
+          // v0.7.4（审计 N18）：传入已处置索引 —— 原来 live 路径不查归档，
+          //   state 重置后撞见同内容会立刻开新行，与 CLI 行为不一致。
+          const ing = ingestFresh(batch, state, settings, {
+            now: Date.now(), maxNewRows, resolved: loadResolvedCached().index,
+          });
+          repo.writeState(state);
+          stats.flushes++;
+          stats.lastFlushAt = Date.now();
+          stats.added += ing.added.length;
+          stats.bumped += ing.bumped.length;
+          stats.silent += ing.silent.length;
+          stats.dropped += ing.dropped || 0;
+          stats.echoGroups += ing.echo || 0;
+          stats.echoEvents += ing.echoEvents || 0;
+          stats.deferredGroups += (ing.deferred || []).length;
+          stats.deferredEvents += (ing.deferred || []).reduce((n, d) => n + d.n, 0);
+          if (ing.added.length) {
+            log.info(`[whale-notebook] 实时入箱 +${ing.added.length} 条（${ing.added.map((a) => a.id).join(',')}）｜待审共 ${ing.pending}`);
+          } else if (ing.deferredOn && (ing.deferred || []).length) {
+            // v0.6 拉取式：只暂存，不写待审箱（用户「小本本复盘」时才入箱）
+            log.debug(`[whale-notebook] 实时暂存 +${ing.deferred.length} 组（暂存共 ${ing.deferredTotal} 组，未入箱）`);
+          } else if (ing.bumped.length) {
+            log.debug(`[whale-notebook] 实时累加 ${ing.bumped.map((b) => b.id).join(',')}`);
+          }
+          return ing;
+        } finally {
+          release();
+        }
       })
       .catch((err) => {
         stats.lastError = err && err.message ? err.message : String(err);
@@ -111,7 +129,7 @@ function createLiveCollector(opts) {
     async dispose() {
       disposed = true;
       if (timer) { clearTimeout(timer); timer = null; }
-      await flush().catch(() => {});
+      await flush(300).catch(() => {}); // 卸载时不长等锁（最多 300ms），拿不到就丢弃缓冲
       sessions.clear();
     },
   };

@@ -155,6 +155,19 @@ function evResult(cid, text, isError, t) {
     try { live3.onEvent(null, null); live3.onEvent({}, { type: 'tool/result', data: { message: { content: 'not-an-array' } } }); } catch (err) { threw = true; }
     check('畸形事件不抛异常（不影响会话）', threw === false);
     await live3.dispose();
+    // ---- ⑧ v0.7.4（审计 N18）：实时路径也查「已处置」索引（原来根本不传 resolved） ----
+    const archDir = path.join(nb, 'archive');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'archive-20260912.md'),
+      '# 归档\n\n| 编号 | 类别 | 次数 | 工作区 | 现象（已打码） | 时间 | 处置 |\n|---|---|---|---|---|---|---|\n'
+      + '| C950 | error | 1 | LiveBox | timeout: connect to host failed | 2026-09-10 09:00 | 面板删除 2026-09-10 09:00 |\n', 'utf8');
+    const beforeRows = repo.pendingCount(repo.readInboxText());
+    const live4 = createLiveCollector({ logger, flushMs: 5 });
+    live4.onEvent(SESSION, evResult('c9', 'timeout: connect to host failed', true, T0 + 20000));
+    await live4.flush();
+    check('实时撞见已处置签名 → 不开新行', repo.pendingCount(repo.readInboxText()) === beforeRows,
+      { before: beforeRows, after: repo.pendingCount(repo.readInboxText()), inbox: repo.readInboxText().trim().slice(-120) });
+    await live4.dispose();
   } catch (err) {
     fails++;
     console.error('FAIL 未捕获异常 :: ' + (err && err.stack ? err.stack : err));

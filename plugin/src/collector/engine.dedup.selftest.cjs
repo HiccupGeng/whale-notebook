@@ -11,7 +11,7 @@ process.env.DSH_WHALE_NB_DIR = tmp;
 for (const d of ['archive', 'archive/details', 'details', 'entries']) fs.mkdirSync(path.join(tmp, d), { recursive: true });
 const repo = require('../store/repo.cjs');
 const { INBOX_HEADER, inboxRow } = require('../core/schema.cjs');
-const { ingestFresh, resolvedSig, loadResolvedIndex, pruneResolvedIndex, SIG_TEXT_MAX } = require('./engine.cjs');
+const { ingestFresh, resolvedSig, loadResolvedIndex, pruneResolvedIndex, loadResolvedCached, SIG_TEXT_MAX } = require('./engine.cjs');
 
 let fails = 0;
 function check(name, cond, extra) {
@@ -62,11 +62,14 @@ const st1 = freshState();
 const r1 = ingestFresh([EV], st1, {}, { now: T0 + 1000 });
 check('首扫开行 1 条', r1.added.length === 1 && r1.suppressed.length === 0, r1.added);
 const inboxAfterFirst = repo.readInboxText();
-check('首扫已写 inbox 行', inboxAfterFirst.indexOf('| C001 |') !== -1, inboxAfterFirst.trim().slice(-80));
+// v0.7.4（审计 N19 连带）：编号下限取 max(state, 在箱最大, 归档最大+1) ——
+// 本 fixture 的归档里已有 C900..C903，所以首个新候选是 C904 而不是 C001（否则会与历史编号撞号）
+check('首扫已写 inbox 行（编号接在归档最大编号之后）', inboxAfterFirst.indexOf('| C904 |') !== -1, inboxAfterFirst.trim().slice(-80));
+check('编号不与归档撞号', inboxAfterFirst.indexOf('| C900 |') === -1 && inboxAfterFirst.indexOf('| C903 |') === -1, inboxAfterFirst.trim().slice(-80));
 // 模拟用户处置：行移出待审箱 → 进归档
 repo.writeInboxText(INBOX_HEADER + '\n');
 fs.appendFileSync(path.join(tmp, 'archive', 'archive-20260910.md'),
-  `| C001 | error | 1 | W | ${SIG.split('|')[1]} | 2026-09-01 10:00 | 同批合并→已解决 2026-09-10（测试2） |\n`, 'utf8');
+  `| C904 | error | 1 | W | ${SIG.split('|')[1]} | 2026-09-01 10:00 | 同批合并→已解决 2026-09-10（测试2） |\n`, 'utf8');
 
 // 模拟 state 重置（水位线/指纹/聚簇全清）→ 同一段日志重扫
 const st2 = freshState();
@@ -74,7 +77,7 @@ const idx3 = loadResolvedIndex();
 const r2 = ingestFresh([EV], st2, {}, { now: T0 + 2000, resolved: idx3 });
 check('重置后重扫：不开新行', r2.added.length === 0, r2.added);
 check('重置后重扫：计入 suppressed', r2.suppressed.length === 1 && r2.suppressed[0].cat === 'error', r2.suppressed);
-check('重置后重扫：inbox 无新增', repo.readInboxText().indexOf('| C00') === -1, repo.readInboxText().trim().slice(-80));
+check('重置后重扫：inbox 无任何候选行', repo.parseInboxRows(repo.readInboxText()).length === 0, repo.readInboxText().trim().slice(-80));
 check('重置后重扫：聚簇已登记（记 cid=null + 计数）', (() => { const h = Object.keys(st2.clusters)[0]; const c = st2.clusters[h]; return !!c && c.cid === null && c.silentN === 1; })(), st2.clusters);
 
 // 未处置签名（不在索引）仍应正常开行
@@ -94,6 +97,24 @@ const st5 = freshState();
 st5.deferred = { h10: { cat: 'error', text: 'unseen deferred text', n: 1, first: T0, last: T0, ws: ['W'], refs: [], excerpt: '' } };
 const f2 = flushDeferred(st5, {}, { now: T0 + 4000, resolved: loadResolvedIndex() });
 check('--add：未处置签名照常入箱', f2.added.length === 1 && f2.suppressed.length === 0, f2);
+
+// ---------- ⑥ v0.7.4（审计 N18）：8 列「空列」形态 + 复发行前缀 ----------
+// 历史遗留形态：`… | 现象 | 时间 |  | 处置 |`（旧版面板删除直接续写 `|` 造成）——
+// 空列会让"弹掉时间列"的兜底循环第一轮就停住，现象文本被污染成 `… | 时间 | `，签名永久失配。
+fs.appendFileSync(path.join(tmp, 'archive', 'archive-20260911.md'),
+  '# 归档\n\n' + hdr +
+  '| C910 | error | 1 | W | 空列形态的现象文本 | 2026-09-01 10:00 |  | 面板删除 2026-09-01 10:00 |\n' +
+  '| C911 | error | 1 | W | 复发（原 C098）：复发行现象文本 | 2026-09-01 10:00 | 同批合并→已解决 2026-09-10 |\n', 'utf8');
+const idx8 = loadResolvedIndex();
+const emptyColSig = [...idx8].filter((s) => s.indexOf('空列形态') !== -1);
+check('8 列空列形态：现象文本不含时间', idx8.has(resolvedSig('error', '空列形态的现象文本')) && !emptyColSig.some((s) => /\d{4}-\d{2}-\d{2}/.test(s)), emptyColSig);
+check('复发前缀被归一化（归档签名能命中聚簇文本）',
+  idx8.has(resolvedSig('error', '复发行现象文本'))
+  && resolvedSig('error', '复发（原 C098）：复发行现象文本') === resolvedSig('error', '复发行现象文本'),
+  [...idx8].filter((s) => s.indexOf('复发') !== -1));
+const cachedIdx = loadResolvedCached();
+check('缓存索引与直读索引一致', cachedIdx.index.size === idx8.size, { cached: cachedIdx.index.size, direct: idx8.size });
+check('缓存记录归档最大编号（供编号下限用）', cachedIdx.maxId === 911, cachedIdx.maxId);
 
 console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录清理失败不影响结论 */ }

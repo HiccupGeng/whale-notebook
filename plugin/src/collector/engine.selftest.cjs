@@ -30,7 +30,11 @@ check('md 标题', md.indexOf('# C008 候选详情') === 0, md.slice(0, 40));
 check('一句话与元信息', md.indexOf('受限沙箱下测试') !== -1 && md.indexOf('sandbox-ep') !== -1 && md.indexOf('次数：3') !== -1, md);
 check('源引用去重且取最新 ≤3', (md.split('\n').filter((l) => /^  - .+ @ .+｜.+｜.+/.test(l)).length) === 3, md);
 check('源引用最新三个会话(去重取较新那次)', md.indexOf('sess-d') !== -1 && md.indexOf('sess-c') !== -1 && md.indexOf('sess-a') !== -1 && md.indexOf('sess-b @') === -1 && md.indexOf('sess-a @ 2026-09-01 10:20') !== -1, md);
-check('日志路径出现', (md.match(/session\.jsonl\.zstd/g) || []).length >= 1, md);
+// v0.7.4（审计 N2）：源引用里的会话日志绝对路径必须打码（原来原样落盘，实测 119 个归档 sidecar 里 92 个含用户名）
+check('源日志路径已打码为 <path>', (md.match(/session\.jsonl\.zstd/g) || []).length === 0 && md.indexOf('｜<path>') !== -1, md);
+// v0.7.4（审计 N9）：实时采集的事件没有 file 字段，此时不能输出字面 undefined
+const mdLive = buildDetailMd(9, Object.assign({}, r, { evs: [{ sid: 'sess-live', at: T0, ws: 'SandBox1', text: '实时事件' }] }));
+check('实时来源无 file → 不出现 undefined', mdLive.indexOf('undefined') === -1 && mdLive.indexOf('实时采集，无日志文件') !== -1, mdLive);
 check('摘录取最长文本', md.indexOf('这是一条超长工具失败原文') !== -1, md);
 check('600 字截断', md.indexOf('（截断：完整错误见源日志') !== -1 && LONG_TEXT.length > 600, md);
 check('代码围栏成对', (md.match(/```/g) || []).length === 2, md);

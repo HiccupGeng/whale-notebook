@@ -25,5 +25,26 @@ check('canonText 长度上限', canonText('x'.repeat(300)).length <= 90);
 check('canonText 确定性', canonText('同一段 文本 abc 123') === canonText('同一段 文本 abc 123'));
 check('hash36 确定', hash36('k1') === hash36('k1') && hash36('k1') !== hash36('k2'));
 
+// ---------- v0.7.4（安全审计 N1）：凭据打码覆盖（原来这几类全部漏网） ----------
+const F = 'ZZFAKEVALUEZZFAKEVALUE';
+function noLeak(name, out, secret) { check(name, typeof out === 'string' && out.indexOf(secret) === -1, out); }
+noLeak('Authorization Bearer 令牌不残留', redact('curl -H "Authorization: Bearer ' + F + '" https://api.example.com'), F);
+noLeak('Authorization Basic 不残留', redact('Authorization: Basic ' + F), F);
+noLeak('Cookie 头不残留', redact('Cookie: sessionid=' + F + '; csrftoken=' + F), F);
+noLeak('AWS_SECRET_ACCESS_KEY 不残留', redact('AWS_SECRET_ACCESS_KEY=' + 'A'.repeat(40)), 'A'.repeat(40));
+noLeak('client_secret 不残留', redact('{"client_secret":"' + F + '"}'), F);
+noLeak('URL 内凭据不残留', redact('fatal: could not read from https://user:' + F + '@github.com/repo.git'), F);
+noLeak('连接串口令不残留', redact('error: connect postgres://admin:' + F + '@10.0.0.5:5432/db failed'), F);
+noLeak('Stripe 短前缀令牌不残留', redact('sk_live_' + 'A'.repeat(24)), 'A'.repeat(24));
+noLeak('Slack 令牌不残留', redact('xoxb-' + '0'.repeat(12) + '-' + 'B'.repeat(12)), 'B'.repeat(12));
+noLeak('npm 令牌不残留', redact('npm_' + 'C'.repeat(36)), 'C'.repeat(36));
+noLeak('Google API key 不残留', redact('AIza' + 'D'.repeat(35)), 'D'.repeat(35));
+check('凭据头后面的 URL 仍保留（不误伤排障信息）',
+  redact('curl -H "Authorization: Bearer ' + F + '" https://api.example.com').indexOf('https://api.example.com') !== -1,
+  redact('curl -H "Authorization: Bearer ' + F + '" https://api.example.com'));
+check('普通文本不被误伤（无凭据不出现 [REDACTED]）',
+  redact('构建产物是新的，控制台回显正常，timeout 与 token 字样只是词').indexOf('[REDACTED]') === -1,
+  redact('构建产物是新的，控制台回显正常，timeout 与 token 字样只是词'));
+
 console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
 process.exit(fails === 0 ? 0 : 1);

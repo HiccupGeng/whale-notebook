@@ -28,10 +28,36 @@ const P = {
 function readJson(file, def) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return def; }
 }
+// v0.7.4（审计 N5）：临时文件名必须是"本进程独有" —— 只做 tmp+rename 不够，
+//   两个进程共用 `x.tmp` 时会互相覆盖/交错写（后者 rename 还可能 ENOENT）。
+let tmpSeq = 0;
+function tmpNameFor(file) { tmpSeq = (tmpSeq + 1) % 100000; return `${file}.${process.pid}.${tmpSeq}.tmp`; }
 function writeJson(file, obj) {
-  const tmp = file + '.tmp';
+  const tmp = tmpNameFor(file);
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 1), 'utf8');
   fs.renameSync(tmp, file);
+}
+// 文件身份（CAS 判据）：size + mtimeMs 变了才认为"别人写过"
+function statOf(file) {
+  try { const st = fs.statSync(file); return { exists: true, size: st.size, mtimeMs: st.mtimeMs }; }
+  catch { return { exists: false, size: -1, mtimeMs: -1 }; }
+}
+// v0.7.4 严格读（state 专用，审计 N19）：只有 ENOENT 才算"没有历史"，其余一律报错；
+//   内容损坏先改名 .corrupt-<ts> 留证再抛 —— 绝不用空状态静默覆盖好文件。
+function readJsonStrict(file, def) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); }
+  catch (err) {
+    if (err && err.code === 'ENOENT') return def;
+    throw new Error(`${path.basename(file)} 读取失败（${(err && err.code) || (err && err.message) || 'unknown'}）；已中止，原文件未被覆盖`);
+  }
+  try { return JSON.parse(raw); }
+  catch (err) {
+    const bak = `${file}.corrupt-${Date.now()}`;
+    let moved = false;
+    try { fs.renameSync(file, bak); moved = true; } catch { /* 备份失败不掩盖原错误 */ }
+    throw new Error(`${path.basename(file)} 内容损坏（${err.message}）；${moved ? '已备份为 ' + path.basename(bak) + '，' : ''}重跑一次即可用空状态重建`);
+  }
 }
 
 // ---- settings ----
@@ -58,8 +84,116 @@ function normalizeState(s) {
   out.v = STATE_VERSION;
   return out;
 }
-function readState() { return normalizeState(readJson(P.state, emptyState())); }
-function writeState(state) { writeJson(P.state, state); }
+// 最近一次 readState 观察到的文件身份（每个进程内 read→write 都在同一同步块里，用模块级变量即可）；
+// stateDiag 供 /whale/live 与测试观测"是否发生过合并 / 锁超时"（审计 N5/N19 的可观测性）。
+let lastReadMeta = { exists: false, size: -1, mtimeMs: -1 };
+const stateDiag = { merges: 0, lastMergeError: null, lockTimeouts: 0, lastLockError: null };
+function readState() {
+  const state = normalizeState(readJsonStrict(P.state, emptyState()));
+  lastReadMeta = statOf(P.state);
+  return state;
+}
+// 并发合并（审计 N5）：本进程 read→加工 期间，别的进程（宿主 live / 另一个 CLI）可能已写过 state；
+// 旧写法 writeState 会把对方整段覆盖。这里比对 size+mtimeMs，变了就把磁盘那份并集合并后重放。
+function pickWatermark(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if ((b.size || 0) !== (a.size || 0)) return (b.size || 0) > (a.size || 0) ? b : a;
+  return (b.offset || 0) >= (a.offset || 0) ? b : a;
+}
+function mergeCounted(a, b) { // clusters / deferred 同键合并
+  if (!a) return b;
+  if (!b) return a;
+  const na = a.n || 0, nb = b.n || 0;
+  const base = nb > na ? b : a;
+  const firsts = [a.first, b.first].filter((x) => Number.isFinite(x));
+  return Object.assign({}, base, {
+    n: Math.max(na, nb),
+    first: firsts.length ? Math.min.apply(null, firsts) : base.first,
+    last: Math.max(a.last || 0, b.last || 0),
+    cid: (a.cid === undefined || a.cid === null) ? (b.cid === undefined ? null : b.cid) : a.cid,
+  });
+}
+function mergeStates(disk, mine) {
+  const out = normalizeState(disk);
+  const b = normalizeState(mine);
+  for (const k of Object.keys(b.files || {})) out.files[k] = pickWatermark(out.files[k], b.files[k]);
+  for (const k of Object.keys(b.clusters || {})) out.clusters[k] = mergeCounted(out.clusters[k], b.clusters[k]);
+  for (const k of Object.keys(b.deferred || {})) out.deferred[k] = mergeCounted(out.deferred[k], b.deferred[k]);
+  const seen = [];
+  const has = new Set();
+  for (const f of [...(out.seenFingerprints || []), ...(b.seenFingerprints || [])]) {
+    if (!has.has(f)) { has.add(f); seen.push(f); }
+  }
+  out.seenFingerprints = seen;
+  out.nextCandidateId = Math.max(out.nextCandidateId || 1, b.nextCandidateId || 1);
+  out.lastScan = Math.max(out.lastScan || 0, b.lastScan || 0);
+  return out;
+}
+function writeState(state) {
+  const cur = statOf(P.state);
+  let next = state;
+  if (lastReadMeta.exists && cur.exists && (cur.size !== lastReadMeta.size || cur.mtimeMs !== lastReadMeta.mtimeMs)) {
+    try {
+      next = mergeStates(readJsonStrict(P.state, emptyState()), state);
+      stateDiag.merges++;
+    } catch (err) {
+      // 磁盘那份已损坏：readJsonStrict 已把它改名留证，这里直接落我们这份（数据更好）
+      stateDiag.lastMergeError = err && err.message ? err.message : String(err);
+      next = state;
+    }
+  }
+  writeJson(P.state, next);
+  lastReadMeta = statOf(P.state);
+}
+
+// ---- 跨进程写锁（v0.7.4，审计 N5）----
+// CLI 扫描 / 宿主实时 flush / 面板删除都改同一批文件（state.json、inbox.md）。
+// lock 文件用 'wx' 原子创建；>15s 的陈旧锁可回收（进程崩溃残留）。
+function lockPath() { return P.state + '.lock'; }
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); return; } catch { /* 回退忙等 */ }
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* spin（仅无法 Atomics.wait 时；总时长仍受 waitMs 上限约束） */ }
+}
+function tryLock() {
+  try {
+    const fd = fs.openSync(lockPath(), 'wx');
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+    fs.closeSync(fd);
+    stateDiag.lastLockError = null;
+    return true;
+  } catch (err) {
+    const code = (err && err.code) || 'UNKNOWN';
+    stateDiag.lastLockError = code;
+    if (code === 'EEXIST') {
+      const st = statOf(lockPath());
+      if (st.exists && Date.now() - st.mtimeMs > 15000) { try { fs.unlinkSync(lockPath()); } catch { /* 回收失败下次再试 */ } }
+    }
+    return false;
+  }
+}
+function unlockState() { try { fs.unlinkSync(lockPath()); } catch { /* 已释放 */ } }
+// EEXIST = 别人持锁（值得等）；其它错误（ENOENT=目录还没建、EACCES=权限）= 等也没用，立刻返回
+function lockRetryable() { return stateDiag.lastLockError === 'EEXIST'; }
+function acquireLockSync(waitMs = 1500) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (tryLock()) return unlockState;
+    if (!lockRetryable()) { stateDiag.lockTimeouts++; return null; }
+    if (Date.now() >= deadline) { stateDiag.lockTimeouts++; return null; }
+    sleepSync(25);
+  }
+}
+async function acquireLock(waitMs = 5000) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (tryLock()) return unlockState;
+    if (!lockRetryable()) { stateDiag.lockTimeouts++; return null; }
+    if (Date.now() >= deadline) { stateDiag.lockTimeouts++; return null; }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 // ---- inbox ----
 function readInboxText() { return fs.existsSync(P.inbox) ? fs.readFileSync(P.inbox, 'utf8') : ''; }
@@ -100,7 +234,7 @@ function bumpInboxRows(text, counts) {
 }
 // 整文件原子替换（tmp + rename；批量追加/改次数走这一条，避免半写与多次写）
 function writeInboxText(text) {
-  const tmp = P.inbox + '.tmp';
+  const tmp = tmpNameFor(P.inbox);
   fs.writeFileSync(tmp, text, 'utf8');
   fs.renameSync(tmp, P.inbox);
 }
@@ -117,7 +251,7 @@ function removeInboxRows(ids) {
     else kept.push(l);
   }
   const removed = gone.length;
-  if (removed) fs.writeFileSync(P.inbox, kept.join('\n'), 'utf8');
+  if (removed) writeInboxText(kept.join('\n')); // v0.7.4：与其它路径统一走原子替换（审计 N6）
   for (const id of gone) archiveDetail(id);
   return { removed };
 }
@@ -142,22 +276,22 @@ function appendEchoArchive(rowsText) {
 // 内容协议见 collector/engine.cjs buildDetailMd：一句话 + 类别/次数 + 源引用 + 打码摘录。
 function detailFilePath(id) { return path.join(P.details, id + '.md'); }
 function writeDetail(id, md) {
-  if (!/^C\d{3}$/.test(id) || typeof md !== 'string') return false;
+  if (!/^C\d{3,}$/.test(id) || typeof md !== 'string') return false;
   if (!fs.existsSync(P.details)) fs.mkdirSync(P.details, { recursive: true });
   const file = detailFilePath(id);
-  const tmp = file + '.tmp';
+  const tmp = tmpNameFor(file);
   fs.writeFileSync(tmp, md, 'utf8');
   fs.renameSync(tmp, file);
   return true;
 }
 function readDetail(id) {
-  if (!/^C\d{3}$/.test(id)) return null;
+  if (!/^C\d{3,}$/.test(id)) return null;
   const file = detailFilePath(id);
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
 }
 // v0.5：候选复发时在 sidecar 末尾追加一段记录（sidecar 不存在则 no-op，绝不新建）
 function appendDetailNote(id, note) {
-  if (!/^C\d{3}$/.test(id) || typeof note !== 'string' || !note.trim()) return false;
+  if (!/^C\d{3,}$/.test(id) || typeof note !== 'string' || !note.trim()) return false;
   const file = detailFilePath(id);
   if (!fs.existsSync(file)) return false;
   fs.appendFileSync(file, '\n' + note.replace(/\s+$/, '') + '\n', 'utf8');
@@ -228,7 +362,7 @@ function nextEntryId(entries) {
 }
 // 按编号读条目文件全文（只读；E### 文件名 = id-slug.md）
 function readEntryText(id) {
-  if (!/^E\d{3}$/.test(id) || !fs.existsSync(P.entries)) return null;
+  if (!/^E\d{3,}$/.test(id) || !fs.existsSync(P.entries)) return null;
   for (const f of fs.readdirSync(P.entries)) {
     if (!f.endsWith('.md')) continue;
     if (f === id + '.md' || f.startsWith(id + '-')) {
@@ -307,8 +441,9 @@ function buildIndexMd(entries) {
 
 module.exports = {
   HOME, NB_DIR, P, STATE_VERSION,
-  readJson, writeJson,
+  readJson, writeJson, readJsonStrict, statOf, tmpNameFor, mergeStates, stateDiag,
   readSettings, readState, emptyState, normalizeState, writeState,
+  lockPath, acquireLock, acquireLockSync, unlockState,
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows, appendEchoArchive,
   parseInboxRows, pendingIds, bumpInboxRows, writeInboxText,
   detailFilePath, writeDetail, readDetail, appendDetailNote, archiveDetail,
