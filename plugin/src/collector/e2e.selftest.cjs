@@ -26,6 +26,8 @@ const LOG = path.join(wsDir, sid, 'session.jsonl.zstd');
 const T0 = Date.parse('2026-09-09T10:00:00+08:00');
 function rec(type, data, t) { return JSON.stringify({ type, time: t, data }); }
 function callRec(cid, name, t) { return rec('tool/call', { callId: cid, name }, t); }
+// v0.7.6（A3）：带命令的 tool/call（出处判定要读 arguments.command）
+function callRec2(cid, name, argsObj, t) { return rec('tool/call', { callId: cid, name, arguments: JSON.stringify(argsObj) }, t); }
 function resultRec(cid, text, isError, t) {
   return rec('tool/result', { message: { source: { callId: cid }, content: [{ type: 'tool-result', isError: !!isError, content: [{ type: 'text', text }] }] } }, t);
 }
@@ -140,6 +142,28 @@ try {
   const echoFiles = fs.readdirSync(path.join(nb, 'archive')).filter((f) => /^echo-\d{8}\.md$/.test(f));
   const echoText = echoFiles.length ? fs.readFileSync(path.join(nb, 'archive', echoFiles[0]), 'utf8') : '';
   check('回声落档（archive/echo-*.md 可审计）', echoFiles.length === 1 && echoText.indexOf('sync-release.cjs') !== -1 && echoText.indexOf('ENC_DIAG_RE') !== -1, echoFiles);
+
+  // ---- v0.7.6（审计第 1 项 A1）：回声落档**幂等** —— 同一现象再被打印一次，归档不再增长 ----
+  // 实测背景：旧逻辑按「聚簇哈希（cat|tool|整段文本）」分组，同一现象第二次被打印时尾部已变 →
+  //   哈希不同 → 新开一行（实测 echo-20260910.md：231 行只对应 77 个不同现象，单现象最多 8 行）。
+  const countEchoRows = (t) => t.split('\n').filter((l) => /^\|\s*\d{4}-\d{2}-\d{2}/.test(l.trim())).length;
+  const echoRowsBefore = countEchoRows(echoText);
+  append([callRec('ce1', 'pwsh', T0 + 400e3), resultRec('ce1', EH1, true, T0 + 400e3 + 1)]);
+  append([callRec('ce2', 'read', T0 + 406e3), resultRec('ce2', EH2, true, T0 + 406e3 + 1)]);
+  append([callRec('ce3', 'node', T0 + 412e3), resultRec('ce3', EH3, true, T0 + 412e3 + 1)]);
+  const outEcho2 = runScan('--check');
+  const echoRowsAfter = countEchoRows(fs.readFileSync(path.join(nb, 'archive', echoFiles[0]), 'utf8'));
+  check('回声落档幂等：同一现象重复打印不再新增行',
+    outEcho2.data.echo === 3 && outEcho2.data.echoDupSkipped === 3 && echoRowsAfter === echoRowsBefore,
+    { echoRowsBefore, echoRowsAfter, echo: outEcho2.data.echo, dup: outEcho2.data.echoDupSkipped });
+  check('幂等在 CLI 文本里可见（不静默）', outEcho2.text.indexOf('已在当日归档') !== -1, outEcho2.text);
+
+  // v0.7.6（A3）：按「出处」整类拦截 —— 命令碰过我们的数据产物，且结果是我们渲染出来的结构化输出
+  append([callRec2('cz1', 'pwsh', { command: 'Get-Content $env:DSH_HOME\\whale-notebook\\state.json -Raw' }, T0 + 418e3)]);
+  append([resultRec('cz1', '{\n  "v": 2,\n  "seenFingerprints": [],\n  "clusters": { "abc": { "cid": "C099" } }\n}', true, T0 + 418e3 + 1)]);
+  const outOwn = runScan('--check');
+  check('A3 出处拦截：打印 state.json 的失败结果不进箱（落 echo 归档）',
+    outOwn.data.added.length === 0 && outOwn.data.echo >= 1, outOwn.data);
 
   // 弱特征只命中 1 条时不得误伤：真实故障文本常含单个技术词（cordis 只出现一次）
   append([callRec('cg1', 'pwsh', T0 + 378e3), resultRec('cg1', 'fatal: 无法连接 cordis 注册表，安装失败', true, T0 + 378e3 + 1)]);

@@ -17,7 +17,8 @@ const { bestFamily, DEFAULT_THRESHOLDS } = require('../core/similarity.cjs');
 const { fmtTime } = require('../core/util.cjs');
 const { oneLiner } = require('../core/summarize.cjs');
 const { PAT_IDS } = require('./patterns.cjs');
-const { collectEventsFrom } = require('./scanner.cjs');
+// v0.7.6：isMetaEcho 供 --forget-echo（历史污染清理）复用同一套回声判定
+const { collectEventsFrom, isMetaEcho } = require('./scanner.cjs');
 const { zstdAvailable, ZSTD_REQUIRED_MSG } = require('./decoder.cjs');
 const { INBOX_HEADER, inboxRow } = require('../core/schema.cjs');
 
@@ -29,6 +30,19 @@ const DETAIL_EXCERPT_MAX = 600;
 
 // v0.5.1：回声落档时的列转义（与 core/schema.cell 同规则，避免 `|` 破坏表格）
 const escCell = (s) => String(s == null ? '' : s).replace(/\|/g, '｜');
+
+// v0.7.6（回声自我放大治理 A1）：回声的**稳定签名**。
+//   实测问题：回声分组原来用「聚簇哈希」（= hash36(cat|tool|整段文本)），同一现象第二次被打印时
+//   尾部（打印出来的表行、行号、上下文）已不同 → 哈希不同 → **新开一行**而不是累加 n，
+//   于是 archive/echo-*.md 单调增长（实测 231 行里只有 77 个不同现象，单现象最多 8 行）。
+//   改用「类别 + 一句话现象（≤90，与归档列同口径）」作签名：同现象永远同一行；
+//   落档前再与当日归档里的既有签名比对 → 已存在则跳过（幂等追加）。
+function echoSig(cat, text) {
+  return `${cat}|${escCell(text)}`;
+}
+function echoSigOf(ev) {
+  return echoSig(ev.cat, oneLiner(redactLines(ev.text), 90));
+}
 
 function clusterKey(ev) {
   let body = canonText(ev.text);
@@ -250,6 +264,8 @@ function scanHistory(state, settings, opts) {
       sid: res.sid || f.sid,
       ws: res.ws || (wm && wm.ws) || f.sid,
       calls: res.calls || (wm && wm.calls) || {}, // 跨窗口继承 callId→工具名（否则 tool 退化成 '?'、聚簇键漂移）
+      // v0.7.6（A3）：callId→命令摘要 同样跨窗口继承（出处判定在增量窗口里仍要生效）
+      cmds: res.cmds || (wm && wm.cmds) || {},
     };
     if (res.partial) retryPending++;
   }
@@ -369,14 +385,15 @@ function ingestFresh(rawEvents, state, settings, opts) {
 
   // ② 同聚簇聚合（n/时间窗/证据/一句话现象）；v0.5.1 先剔除自引用/探针回声（落档可审计）
   const agg = new Map();
-  const echo = new Map(); // hash -> { cat, ws, n, last, text }
+  const echo = new Map(); // v0.7.6：回声签名 -> { cat, ws, n, last, text }（签名＝类别|一句话现象，见 echoSigOf）
   for (const it of fresh) {
     const ev = it.ev;
     if (ev.meta) {
-      const e = echo.get(it.hash) || { cat: ev.cat, n: 0, last: ev.at, ws: ev.ws, text: oneLiner(redactLines(ev.text), 90) };
+      const sig = echoSigOf(ev);
+      const e = echo.get(sig) || { cat: ev.cat, n: 0, last: ev.at, ws: ev.ws, text: oneLiner(redactLines(ev.text), 90) };
       e.n++;
       if (ev.at > e.last) e.last = ev.at;
-      echo.set(it.hash, e);
+      echo.set(sig, e);
       continue;
     }
     if (ev.cat !== 'error' && !PAT_IDS.has(ev.cat)) continue;
@@ -522,9 +539,19 @@ function ingestFresh(rawEvents, state, settings, opts) {
   }
   if (!dry && (countMap.size || newRowLines.length)) repo.writeInboxText(inboxText);
   // v0.5.1：回声落档（不占待审箱，但留证据可查）
+  // v0.7.6（A1）：幂等追加 —— 当日归档里已有同签名的行就不再写（否则"打印一次多一行"自我放大）。
+  let echoDupSkipped = 0;
   if (!dry && echo.size) {
-    const rows = [...echo.values()].map((e) => `| ${fmtTime(e.last)} | ${e.cat} | ${e.n} | ${escCell(e.ws)} | ${escCell(e.text)} |`);
-    try { repo.appendEchoArchive(rows.join('\n')); } catch (err) { /* 落档失败不阻断 */ }
+    const existing = o.echoSeen instanceof Set ? o.echoSeen : repo.readEchoSignatures();
+    const rows = [];
+    for (const [sig, e] of echo) {
+      if (existing.has(sig)) { echoDupSkipped++; continue; }
+      rows.push(`| ${fmtTime(e.last)} | ${e.cat} | ${e.n} | ${escCell(e.ws)} | ${escCell(e.text)} |`);
+      existing.add(sig); // 同一轮里重复签名也只写一行
+    }
+    if (rows.length) {
+      try { repo.appendEchoArchive(rows.join('\n')); } catch (err) { /* 落档失败不阻断 */ }
+    }
   }
 
   // ⑤ 状态回写（seen 截尾，防止无限增长）
@@ -535,8 +562,10 @@ function ingestFresh(rawEvents, state, settings, opts) {
 
   return {
     added, bumped, silent, suppressed, dropped, deferred: deferredList, deferredTotal: Object.keys(def).length, deferredOn,
-    echo: echo.size, echoEvents: [...echo.values()].reduce((a2, e) => a2 + e.n, 0),
+    echo: echo.size, echoEvents: [...echo.values()].reduce((a2, e) => a2 + e.n, 0), echoDupSkipped,
     pending: repo.pendingCount(inboxText), fresh: fresh.length, dry,
+    // v0.7.6（审计第 5 项加固）：本批里"因指纹已见而跳过"的条数（live 侧双计风险的观测口径）
+    dupFingerprints: rawEvents.length - fresh.length,
   };
 }
 
@@ -648,6 +677,27 @@ function flushDeferred(state, settings, opts) {
   }
   if (!dry && (countMap.size || newRowLines.length)) repo.writeInboxText(inboxText);
   return { added, bumped, suppressed, dropped, remaining: Object.keys(def).length, pending: repo.pendingCount(inboxText), dry };
+}
+
+// v0.7.6（数据修复）：把「自引用/探针回声」从**暂存**里清掉。
+//   背景：v0.7.1 之前的签名覆盖不全，实测 18 条暂存里有 13 条（72%）是我们自己的探针/接口/状态转储 →
+//   等用户做「小本本复盘」时得一条条手动排。签名补全（A2/A3）后，用同一套判定回头清理历史污染。
+//   安全：默认**只干跑**（apply=false），列出将删除的条目；只有 --apply 才真的删。
+function forgetEchoDeferred(state, settings, opts) {
+  const o = opts || {};
+  const apply = o.apply === true;
+  const def = state.deferred || (state.deferred = {});
+  const hits = [];
+  for (const k of Object.keys(def)) {
+    const d = def[k] || {};
+    const t = String(d.text || '');
+    const ex = String(d.excerpt || '');
+    if ((t && isMetaEcho(t)) || (ex && isMetaEcho(ex))) {
+      hits.push({ hash: k, cat: d.cat, n: d.n || 0, text: t.slice(0, 90) });
+    }
+  }
+  if (apply) for (const h of hits) delete def[h.hash];
+  return { hits, removed: apply ? hits.length : 0, remaining: Object.keys(def).length, apply };
 }
 
 function recurrenceNote(a, c, now) {
@@ -779,7 +829,7 @@ function runScanInner(mode, o) {
   if (ing.silent.length) bits.push(`复发冷却静默 ${ing.silent.length} 条`);
   if (ing.suppressed.length) bits.push(`已处置签名压掉重复候选 ${ing.suppressed.length} 条(重置后重扫不再重复开行)`);
   if (ing.dropped) bits.push(`超单轮上限丢弃 ${ing.dropped} 条(已记指纹)`);
-  if (ing.echo) bits.push(`自引用回声过滤 ${ing.echo} 组/${ing.echoEvents} 条(落 archive/echo-*.md)`);
+  if (ing.echo) bits.push(`自引用回声过滤 ${ing.echo} 组/${ing.echoEvents} 条(落 archive/echo-*.md)` + (ing.echoDupSkipped ? `，其中 ${ing.echoDupSkipped} 组已在当日归档(不重复落档)` : ''));
   bits.push(`待审共 ${ing.pending} 条`);
   bits.push(scanLine);
   bits.push(`${ms}ms`);
@@ -789,7 +839,9 @@ function runScanInner(mode, o) {
     data: {
       added: ing.added, bumped: ing.bumped, silent: ing.silent, suppressed: ing.suppressed, dropped: ing.dropped,
       deferred: ing.deferred, deferredTotal: ing.deferredTotal, deferredOn: ing.deferredOn,
-      echo: ing.echo, echoEvents: ing.echoEvents, rebuild,
+      echo: ing.echo, echoEvents: ing.echoEvents, echoDupSkipped: ing.echoDupSkipped || 0,
+      dupFingerprints: ing.dupFingerprints || 0,
+      rebuild,
       pending: ing.pending, ms, scan: s, dry: !!o.dry,
     },
   };
@@ -839,6 +891,8 @@ function buildDetailMd(cid, r) {
 
 module.exports = {
   runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
+  // v0.7.6（回声自我放大治理）：回声稳定签名 + 历史污染清理
+  echoSig, echoSigOf, forgetEchoDeferred,
   // v0.6.2：已处置签名索引（防重置后重扫重复开行）
   resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
   // v0.7.4：归档索引 + 最大编号的 mtime 缓存（实时采集与编号下限共用）

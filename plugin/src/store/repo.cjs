@@ -268,13 +268,73 @@ function archiveInboxRows(rowsText) {
 }
 
 // v0.5.1：自引用/探针回声落档（被过滤的候选不静默丢失，可事后审计）
+// v0.7.6（回声自我放大治理 A1/A4）：
+//   ① 追加前由 engine 用 readEchoSignatures() 去重（同签名不再落档）——本函数只负责"写"，不判判定；
+//   ② 当日文件行数超上限时自动轮转 echo-YYYYMMDD-2.md（防止单文件无限增长）。
+const ECHO_MAX_ROWS = 400;
+const ECHO_DAY_RE = /^echo-(\d{8})(?:-(\d+))?\.md$/;
+const ECHO_ROW_RE = /^\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s*\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)\|\s*$/;
+function echoDay() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }
+function echoFilesOf(day) {
+  let names; try { names = fs.readdirSync(P.archive); } catch { return []; }
+  const want = day || echoDay();
+  return names.filter((n) => { const m = ECHO_DAY_RE.exec(n); return !!m && m[1] === want; }).sort();
+}
+// 归档行形态：`| 时间 | 类别 | 次数 | 工作区 | 现象（已打码） |` → 签名为「类别|现象」（与 engine.echoSig 同口径）
+function readEchoSignatures(day) {
+  const out = new Set();
+  for (const name of echoFilesOf(day)) {
+    let text; try { text = fs.readFileSync(path.join(P.archive, name), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      const m = ECHO_ROW_RE.exec(line.trim());
+      if (m) out.add(`${m[1].trim()}|${m[4].trim()}`);
+    }
+  }
+  return out;
+}
+// 当日回声归档的行数（/whale/live 观测用：回声在不在长，一眼可见）
+function echoStats() {
+  const day = echoDay();
+  const files = echoFilesOf(day);
+  let rows = 0, bytes = 0;
+  for (const name of files) {
+    let text; try { text = fs.readFileSync(path.join(P.archive, name), 'utf8'); } catch { continue; }
+    bytes += Buffer.byteLength(text, 'utf8');
+    for (const line of text.split('\n')) if (ECHO_ROW_RE.test(line.trim())) rows++;
+  }
+  let totalFiles = 0, totalRows = 0;
+  let names; try { names = fs.readdirSync(P.archive); } catch { names = []; }
+  for (const name of names) {
+    if (!ECHO_DAY_RE.test(name)) continue;
+    totalFiles++;
+    let text; try { text = fs.readFileSync(path.join(P.archive, name), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) if (ECHO_ROW_RE.test(line.trim())) totalRows++;
+  }
+  return { day, files: files.length, rows, bytes, totalFiles, totalRows, cap: ECHO_MAX_ROWS };
+}
 function appendEchoArchive(rowsText) {
   if (!rowsText) return false;
   if (!fs.existsSync(P.archive)) fs.mkdirSync(P.archive, { recursive: true });
-  const name = `echo-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.md`;
-  const file = path.join(P.archive, name);
-  fs.appendFileSync(file, (fs.existsSync(file) ? '' : '# 自引用/探针回声（已过滤，未进待审箱）\n\n| 时间 | 类别 | 次数 | 工作区 | 现象（已打码） |\n|---|---|---|---|---|\n') + rowsText + '\n', 'utf8');
-  return true;
+  const day = echoDay();
+  const add = rowsText.split('\n').filter((l) => ECHO_ROW_RE.test(l.trim())).length || 1;
+  const files = echoFilesOf(day);
+  let name = files.length ? files[files.length - 1] : `echo-${day}.md`;
+  let file = path.join(P.archive, name);
+  // 轮转：当日当前分片已满则开下一个分片（第 2 片起带 -N 后缀）
+  let cur = 0;
+  if (fs.existsSync(file)) {
+    let text = ''; try { text = fs.readFileSync(file, 'utf8'); } catch { /* 读不到就当空 */ }
+    for (const line of text.split('\n')) if (ECHO_ROW_RE.test(line.trim())) cur++;
+  }
+  if (cur >= ECHO_MAX_ROWS) {
+    const m = ECHO_DAY_RE.exec(name);
+    const idx = m && m[2] ? parseInt(m[2], 10) + 1 : 2;
+    name = `echo-${day}-${idx}.md`;
+    file = path.join(P.archive, name);
+  }
+  const header = '# 自引用/探针回声（已过滤，未进待审箱）\n\n| 时间 | 类别 | 次数 | 工作区 | 现象（已打码） |\n|---|---|---|---|---|\n';
+  fs.appendFileSync(file, (fs.existsSync(file) ? '' : header) + rowsText + '\n', 'utf8');
+  return name;
 }
 
 // ---- candidate details（v0.3 sidecar：details/C###.md，随候选行同生命周期）----
@@ -450,6 +510,8 @@ module.exports = {
   readSettings, readState, emptyState, normalizeState, writeState,
   lockPath, acquireLock, acquireLockSync, unlockState,
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows, appendEchoArchive,
+  // v0.7.6（回声自我放大治理）：回声签名去重 + 健康度观测
+  readEchoSignatures, echoStats, ECHO_MAX_ROWS,
   parseInboxRows, pendingIds, bumpInboxRows, writeInboxText,
   detailFilePath, writeDetail, readDetail, appendDetailNote, archiveDetail,
   listEntries, nextEntryId, readEntryText, buildIndexMd,

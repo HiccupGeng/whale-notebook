@@ -231,6 +231,17 @@
 
 **仍未修（P1 剩余 / P2）**：N7（`/whale/scan` 同步执行阻塞事件循环）· N21（`--rebuild` 与实时采集的窗口，现由写锁覆盖但未做"暂停 live"）· N22（live 与批扫双计，需生成实际计数）· N8（回声漏网）· N24（echo 自我放大，**唯一已实测在发生的增长问题**）· N10–N17 · N27–N29。
 
+### 实施记录（第三批，v0.7.6 —— 对应 `docs/2026_09_11_14_whale-notebook五项遗留问题解决方案.md` 批次 A）
+
+| 项 | 改动文件 | 验证证据 |
+|---|---|---|
+| **N8 + N24 回声自我放大**（本批最优先） | `src/collector/engine.cjs`（`echoSig`/`echoSigOf` 稳定签名、回声按签名分组、落档前读当日已有签名做幂等、`echoDupSkipped`、`dupFingerprints`）、`src/store/repo.cjs`（`readEchoSignatures`/`echoStats`/`ECHO_MAX_ROWS=400` 与 `echo-<日期>-2.md` 轮转）、`src/collector/scanner.cjs`（`META_ARTIFACT` 产物标识签名、API 信封判据、`isOwnOutput` 出处拦截、`cmdOf` 命令摘要 + 跨窗口继承）、`lib/index.js`（`/whale/live` 增 `echo`） | 实测基线：echo 归档 **231 行只对应 77 个现象**（55 个多行、单现象最多 8 行）。`live.selftest` +10（13 条真实漏网样本全命中 + **5 条真实故障反证 0 误伤** + 出处正例 1/反证 2 + 摘要继承）；`e2e.selftest` +3（**幂等：同一现象重复打印后归档行数不变**、`echoDupSkipped=3`、出处拦截）；`repo.selftest` +5（签名读回、轮转、跨分片去重） |
+| **N22 live 与批扫双计**（原假设需修 → 实测**不成立**） | `src/collector/live.cjs`（`toolUnknown`/`skippedByFingerprint` 计数）、`lib/index.js`（`/whale/live` 增 `dedup`）、`live.selftest`（不变量断言） | 实验：制造 1 次真实工具失败 → live 落盘（`events=1 flushes=1 deferGroups=1`，指纹 215→216）→ 立刻批扫同一日志（`scanned=1/53ms`）→ 该事件 **`n=1` 且 `first==last`**（双计应为 2）、指纹与聚簇数不变；指纹身份 **25/25 sid 与磁盘会话目录名一致**、按 `at|hash` **0 组跨 sid 重复**。结论：两条路指纹逐字节一致，**无需修改**；改为用计数器（`toolUnknown` 为唯一残留路径的观测口径）+ 单测不变量把结论钉住 |
+| **数据修复：清理已污染暂存**（用户批准） | `src/collector/cli.cjs`（`--forget-echo [--apply]`）、`engine.forgetEchoDeferred()` | 干跑清单与人工分诊完全一致（13 条）；执行后暂存 **18 → 5 组**（保留沙箱拒写 / DNS+TCP443 / SSH 公钥 / 工具超时 / 未知工具名 5 条真实发现），`seenFingerprints` 215、`nextCandidateId` 137 未变，无 `.lock`/`.tmp` 残留 |
+
+**口径变化（第三批）**：自检由 10 套件 386 → **409 断言**（`repo.selftest` 23→28、`engine.selftest` 21→26、`e2e.selftest` 63→66、`live.selftest` 35→45）；13 个测试文件 PASS 累计 **502**。宿主半边（`/whale/live` 新字段）需**先 `deploy-web --apply` 再重启 `dsh web`**；回声判定/幂等落档与 `--forget-echo` 在批扫侧立即生效。
+**追加发现（第 4 项"漂移守卫"前置）**：`.lifecycle/manifest.json` 里 `agents` 条目登记为 `whole` 模式（"整文件归本插件所有，卸载整文件删除"），而该文件现已含用户「手动段（用户自写区）」→ `uninstall remove/purge` 会连用户手写内容一起删除。用户指示**稍后单独讨论再决定**是否改 `zones`，本批未动。
+
 ---
 
 ## 8. 与既有文档的口径订正

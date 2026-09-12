@@ -12,7 +12,7 @@ import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 import { zstdAvailable } from '../src/collector/decoder.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.5' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.6' };
 
 function sendJson(res, code, obj) {
   try {
@@ -196,10 +196,11 @@ export function apply(ctx) {
       if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
       const state = repo.readState();
       const files = state.files || {};
+      const liveStatus = live ? live.status() : null;
       sendJson(res, 200, {
         ok: true,
         version: PACKAGE.version,
-        live: live ? live.status() : null,
+        live: liveStatus,
         watermarks: Object.keys(files).length,
         clusters: Object.keys(state.clusters || {}).length,
         fingerprints: (state.seenFingerprints || []).length,
@@ -209,6 +210,11 @@ export function apply(ctx) {
         scan: state.lastScanStats || null,
         stuckWatermarks: Object.keys(files).filter((k) => (files[k] && files[k].badRounds || 0) > 0).length,
         diag: Object.assign({}, repo.stateDiag),
+        // v0.7.6（审计第 1 项 A4）：回声归档在不在长（自我放大的观测口径）
+        echo: repo.echoStats(),
+        // v0.7.6（审计第 5 项加固）：与批扫"是否双计"的两个口径 ——
+        //   toolUnknown（应为 0）与 skippedByFingerprint（>0 说明 live 与批扫共用同一指纹）
+        dedup: liveStatus ? { toolUnknown: liveStatus.toolUnknown || 0, skippedByFingerprint: liveStatus.skippedByFingerprint || 0 } : null,
       });
     }),
   }), 'whale-notebook: GET /whale/live');

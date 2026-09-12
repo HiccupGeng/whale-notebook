@@ -104,6 +104,32 @@ const ev = { sid: 's', at: 1, ws: 'W', file: 'f', cat: 'error', tool: 'pwsh', te
 const ing = ingestFresh([ev], st6, { autoAdd: true }, { now: 2 });
 check('编号下限取归档最大+1（C137 而不是 C001）', ing.added.length === 1 && ing.added[0].id === 'C137', ing.added);
 
+// ---------- ⑦ v0.7.6：回声归档 —— 签名可读回 / 幂等由 engine 负责 / 超上限自动轮转 ----------
+const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+const row = (t, cat, n, ws, text) => `| ${t} | ${cat} | ${n} | ${ws} | ${text} |`;
+repo.appendEchoArchive([row('2026-09-11 10:00', 'error', 1, 'W', '我们自己的探针输出')].join('\n'));
+repo.appendEchoArchive([row('2026-09-11 10:01', 'error', 2, 'W', '第二条回声')].join('\n'));
+const sigs = repo.readEchoSignatures();
+check('回声签名可读回（类别|现象）', sigs.size === 2 && sigs.has('error|我们自己的探针输出'), [...sigs]);
+check('回声归档不计入已处置索引（仍是 archive-* 之外的文件）',
+  fs.readdirSync(path.join(tmp, 'archive')).filter((n) => /^echo-/.test(n)).length === 1,
+  fs.readdirSync(path.join(tmp, 'archive')));
+const echoStat0 = repo.echoStats();
+check('echoStats 报当日行数与总量', echoStat0.rows === 2 && echoStat0.files === 1 && echoStat0.cap === repo.ECHO_MAX_ROWS, echoStat0);
+// 轮转：把当日分片填到上限，再追加一行 → 必须新开 echo-<day>-2.md（单文件不会无限增长）
+const filler = [];
+for (let i = 0; i < repo.ECHO_MAX_ROWS; i++) filler.push(row('2026-09-11 11:00', 'error', 1, 'W', '填充行 ' + i));
+repo.appendEchoArchive(filler.join('\n'));
+repo.appendEchoArchive([row('2026-09-11 12:00', 'error', 1, 'W', '轮转后的新行')].join('\n'));
+const echoNames = fs.readdirSync(path.join(tmp, 'archive')).filter((n) => /^echo-/.test(n)).sort();
+// 注意：分片名排序（-2 后缀的 '-' 排在 '.' 之前）不保证顺序，故按"集合包含"判定，不按下标取。
+check('回声归档超上限自动轮转（echo-<day>-2.md）',
+  echoNames.length === 2 && echoNames.includes(`echo-${day}.md`) && echoNames.includes(`echo-${day}-2.md`), echoNames);
+const afterRoll = repo.echoStats();
+check('轮转后签名集合覆盖两个分片（去重仍生效）',
+  repo.readEchoSignatures().has('error|轮转后的新行') && repo.readEchoSignatures().has('error|我们自己的探针输出')
+  && afterRoll.files === 2 && afterRoll.totalRows === repo.ECHO_MAX_ROWS + 3, afterRoll);
+
 console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
 process.exit(fails === 0 ? 0 : 1);

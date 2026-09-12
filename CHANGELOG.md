@@ -1,7 +1,37 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.5`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.6`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+
+## v0.7.6（2026-09-12）回声自我放大治理 · 暂存污染清理 · 双计口径加固
+
+**起因**：接 `docs/2026_09_11_14_whale-notebook五项遗留问题解决方案.md` 的五项梳理。用户裁定按批次 A（本版）→ B → C 执行，并同意清理已污染的暂存。本版做**批次 A**：回声自我放大（唯一实测在发生的增长问题）＋ 双计口径加固（实测证明无需修，改为钉住结论）。
+
+### ① 回声落档「稳定签名 + 幂等追加」（`engine.cjs` + `repo.cjs` + `scanner.cjs`）
+
+**问题**（实测）：`archive/echo-20260910.md` 218 行 + `echo-20260911.md` 13 行 = **231 行只对应 77 个不同现象**（55 个现象有多行、单现象最多 8 行），其中 20 行的现象本身就是"我们自己的渲染行"（`--- echo tail --- | 2026-09-10 12:21 | error | 2 | …`）。根因是**分组方式**：回声按「聚簇哈希 = `cat|tool|整段文本`」聚合，同一现象第二次被打印时尾部（打印出来的表行、行号、上下文）已变 → 哈希不同 → **新开一行**而不是累加 `n`；落档又只 append、从不与已有行比对 → 文件单调增长。
+
+**修法**：① 回声签名改为 **`类别|一句话现象(≤90字)`**（与归档列同口径，`echoSigOf()`），同现象永远同一行；② 落档前用 `repo.readEchoSignatures()` 读回当日归档已有签名，**已存在就不写**（幂等），CLI 输出「其中 N 组已在当日归档(不重复落档)」；③ 当日分片超 `ECHO_MAX_ROWS`（400）自动轮转 `echo-<日期>-2.md`；④ `GET /whale/live` 增 `echo`（当日/累计行数/上限），回声在不在长一眼可见。
+
+### ② 签名表补全（A2）+ 按出处整类拦截（A3）（`scanner.cjs`）
+
+**问题**（实测）：18 组暂存里 **13 组（72%）是我们自己的产物**：我们 API 的 JSON 信封（`HTTP 200 {"ok":true,"id":"C122","candidate":{…}}`）、`state.json` 的字段名（`"reAddedAt": 0`）、一次性探针的抬头（`topKeys=…`、`parts=7 […]`、`== clusters sample`、`exists=True lines=`、`logged97 statNow`、`=== listEntries ===`、`archive-20260909.md rows 1 parsed 1`）、自检输出（`=== lifecycle/selftest.cjs ===`）。它们多以「命令类工具的成功结果」形态出现，而**旧签名只认渲染痕迹与采集器源码名**，于是全部漏网（同一批污染也在候选流里开过行：C092 的现象就是 `--- echo tail --- | …`）。
+
+**修法**：① `META_ARTIFACT` —— 我们自己的标识符与抬头**单条命中即判**（`seenFingerprints`/`nextCandidateId`/`reAddedAt`/`lastScanStats`/`familyScore` 五个 field 名、探针抬头、表头 `| 时间 | 类别 |`）；② API 信封判据（`"ok":true` **且** 出现我们 API 的键名，单独出现不算）；③ **A3 出处拦截**：命令碰过我们的**数据产物/接口**（`whale-notebook/{state.json,inbox.md,INDEX.md,details,archive,entries}`、`/whale/*`、`mine.cjs`）**且**结果里是我们渲染的结构化输出（≥3 列表格行 / JSON 对象字面量）→ 判回声。**只碰 `plugin/src|lib|scripts` 的开发调试不算**（跑自检发现的真实 bug 必须继续进箱——历史上真从自检里发现过框架级 bug）；`callId→命令摘要` 与既有 `callId→工具名` 一样**跨水位线窗口继承**，否则增量扫描里出处判定会失效。
+
+**验证**：`live.selftest` +10（13 条真实漏网样本全部命中 + **5 条真实故障反证 0 误伤** + 出处判定正例 1／反证 2 + 命令摘要跨窗口继承）；`e2e.selftest` +3（幂等：同一现象重复打印后归档行数**不变**且 `echoDupSkipped=3`；出处拦截：打印 `state.json` 的失败结果不进箱）。
+
+### ③ 历史污染清理：`mine.cjs --forget-echo [--apply]`（`cli.cjs` + `engine.forgetEchoDeferred()`）
+
+**修法**：用同一套回声判定回头清理**暂存**（默认**干跑**列清单，`--apply` 才删；写盘走同一把写锁）。**实测执行**：命中 13 组 / 剩余暂存 **18 → 5**（保留的正是 5 条真实发现：沙箱拒写、DNS/TCP443 不通、SSH 公钥被拒、工具调用超时、未知工具名），`seenFingerprints` 215 与 `nextCandidateId` 137 均未受影响。`engine.selftest` +5（签名口径/稳定性/不吞并不同内容 + 干跑不动数据 + apply 保留真实故障）。
+
+### ④ 双计口径加固（审计第 5 项：实测**未发生**，改为钉住结论）
+
+**实测方法**：制造一次真实工具失败 → 等 3s 让实时采集落盘（`events=1 flushes=1 deferGroups=1`，指纹 215→216）→ 立刻跑 `mine.cjs --check` 重扫同一会话日志（`scanned=1 / 53ms`）。结果：该事件在 `state.deferred` 里 **`n=1` 且 `first == last`**（若被两侧各记一次应为 2），指纹数与聚簇数不变；指纹身份核对 **25/25 的 sid 与磁盘会话目录名一致**、按 `at|hash` 分组 **0 组出现两个不同 sid**。结论：live 与批扫对同一物理事件产出**完全相同**的指纹，不存在双计。**修法不是改指纹**（迁移 215 条历史指纹的风险大于收益），而是把结论钉住：`live` 增 `toolUnknown`（工具名退化成 `?` 的次数——`tool` 是聚簇键的一部分，是唯一残留的双计路径，长期为 0 即为证伪）与 `skippedByFingerprint`（因指纹已见而跳过的条数，是"两侧共用同一指纹"的正面证据），并入 `GET /whale/live` 的 `dedup`；`live.selftest` 增不变量断言「live 与批扫指纹逐字节一致」。
+
+**验证汇总**：10 套件 **409 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＝ 13 个测试文件 PASS 累计 **502**（2026-09-12）。新增/变化：`repo.selftest` 23→28、`engine.selftest` 21→26、`e2e.selftest` 63→66、`live.selftest` 35→45。
+**生效**：回声判定与幂等落档、`--forget-echo` 在**批扫侧立即生效**；`lib/index.js` 新增的 `/whale/live` 观测字段属宿主半边，需**先 `deploy-web --apply` 再重启 `dsh web`**。
+**未做（保留给批次 B/C）**：`/whale/scan` 异步化（分片让出事件循环）、`--rebuild` 维护窗口、漂移守卫（`lifecycle check` 恒 exit 1；附带发现 AGENTS 条目登记为 `whole` 模式、而该文件已含用户「手动段」→ 卸载会整文件删除，需先改 `zones`，用户要求稍后单议）。
 
 ## v0.7.5（2026-09-11）端点闸门（防跨站/防重绑定）· 采集健康度可观测
 
@@ -194,11 +224,11 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 | `plugin/src/core/privacy.selftest.cjs` | 23 |
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
-| `plugin/src/store/repo.selftest.cjs` | 23 |
-| `plugin/src/collector/engine.selftest.cjs` | 21 |
+| `plugin/src/store/repo.selftest.cjs` | 28 |
+| `plugin/src/collector/engine.selftest.cjs` | 26 |
 | `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
-| `plugin/src/collector/e2e.selftest.cjs` | 63 |
-| `plugin/src/collector/live.selftest.cjs` | 35 |
-| **合计** | **386**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **457**） |
+| `plugin/src/collector/e2e.selftest.cjs` | 66 |
+| `plugin/src/collector/live.selftest.cjs` | 45 |
+| **合计** | **409**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **502**） |
 
-最近一次全绿：**2026-09-11**（v0.7.5）。
+最近一次全绿：**2026-09-12**（v0.7.6）。

@@ -129,6 +129,36 @@ if (fx) {
     (() => { persistScanStats(st, s2, '--check'); return st.lastScanStats && st.lastScanStats.corruptFrames === 1 && !!st.lastScanStats.stuckFiles[0].where; })(),
     st.lastScanStats);
 }
+// ---- v0.7.6（审计第 1 项）：echo 稳定签名 + 历史污染清理（--forget-echo 的纯函数内核）----
+// 背景：回声分组原来按"聚簇哈希（整段文本）"，尾部一变就新开一行 → 231 行只对应 77 个现象。
+{
+  const { echoSig, echoSigOf, forgetEchoDeferred } = require('./engine.cjs');
+  const evEcho = { cat: 'encoding', at: T0, ws: 'W', sid: 's', tool: 'pwsh', text: 'HTTP 200 {"ok":true,"id":"C122","candidate":{"id":"C122"' };
+  check('v0.7.6 echo 签名与归档列同口径（类别|一句话）',
+    echoSigOf(evEcho) === echoSig('encoding', 'HTTP 200 {"ok":true,"id":"C122","candidate":{"id":"C122"'), echoSigOf(evEcho));
+  // 真实不变式：**前 90 字相同**（打码后）→ 同签名（尾部差异——正是"同一现象被二次打印"的形态——不影响）；
+  // 前 90 字不同 → 必须仍是两个签名（否则会把不同内容压成同一行）。
+  const tail80 = 'word '.repeat(40); // 200 字，含空格 → oneLiner 截到前 90 字 + '…'
+  check('v0.7.6 echo 签名对同现象稳定（尾 90 字以外的差异不影响签名）',
+    echoSigOf({ cat: 'error', text: tail80 + 'TAIL-A' }) === echoSigOf({ cat: 'error', text: tail80 + 'TAIL-B' }));
+  check('v0.7.6 echo 签名不吞并不同内容（前 90 字不同 = 两个签名）',
+    echoSigOf({ cat: 'error', text: 'first failure text AAAAAAAA' }) !== echoSigOf({ cat: 'error', text: 'second failure text BBBBBBB' }));
+
+  const stateF = repo2.emptyState();
+  stateF.deferred = {
+    leak1: { cat: 'encoding', text: 'topKeys=ok,stats,global,projects,disabled rawHead={"ok":true', n: 1, first: 1, last: 1, ws: ['W'], refs: [], excerpt: '' },
+    leak2: { cat: 'sandbox-file', text: 'lines=2946 chars=129046 idx=123471 286, "reAddedAt": 0', n: 2, first: 2, last: 2, ws: ['W'], refs: [], excerpt: '' },
+    real3: { cat: 'git-net', text: '--- 1) DNS --- 20.205.243.166 --- 2) TCP443 --- github.com:443 reachable = False', n: 1, first: 3, last: 3, ws: ['W'], refs: [], excerpt: '' },
+  };
+  const dryOut = forgetEchoDeferred(stateF, {}, {});
+  check('v0.7.6 --forget-echo 干跑：列出被污染条目但不动数据',
+    dryOut.apply === false && dryOut.removed === 0 && dryOut.hits.length === 2 && Object.keys(stateF.deferred).length === 3,
+    { hits: dryOut.hits.length, left: Object.keys(stateF.deferred).length });
+  const appliedOut = forgetEchoDeferred(stateF, {}, { apply: true });
+  check('v0.7.6 --forget-echo --apply：删掉自引用条目、保住真实故障',
+    appliedOut.removed === 2 && Object.keys(stateF.deferred).length === 1 && !!stateF.deferred.real3,
+    { removed: appliedOut.removed, left: Object.keys(stateF.deferred) });
+}
 try { fsx.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
 
 console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);

@@ -17,6 +17,7 @@ const repo = require('../store/repo.cjs');
 const { createLiveCollector } = require('./live.cjs');
 const { classifyRecord, newSessionCtx, extractToolResult, isMetaEcho, classifyUserMessage } = require('./scanner.cjs');
 const { PATTERNS } = require('./patterns.cjs');
+const { fpOf, clusterKey } = require('./engine.cjs'); // v0.7.6：live/批扫指纹一致性不变量
 
 let fails = 0;
 function check(name, cond, extra) {
@@ -107,6 +108,61 @@ function evResult(cid, text, isError, t) {
     check('不误伤：同一失败原文本身（无转储信封）仍按真实故障处理',
       isMetaEcho("=== trying 140.82.114.3 ===\n=== trying 20.27.177.113 ===\nPUSH OK via 20.27.177.113\n[stderr]\ngit : fatal: unable to access 'https://github.com/o/r.git/': Recv failure: Connection was reset") === false);
 
+    // ---- ①d v0.7.6（审计第 1 项 A2/A3）：回声自我放大治理 ——「我们自己的产物」不许进候选池 ----
+    // 13 条样本全部取自真实历史（2026-09-11 实测：18 条暂存里 13 条是这种自引用输出，占 72%）。
+    const REAL_LEAKS = [
+      'HTTP 200 {"ok":true,"id":"C122","candidate":{"id":"C122","cat":"encoding"',
+      'lines=2946 chars=129046 idx=123471 286, "reAddedAt": 0, "reAdds": 0, "family": null,',
+      'encoding-probe: [stderr] [eval]:2 const {zstdDecompressSync}=require(node:zlib);',
+      "exists=True lines=163 119: mirrorDir(path.join(NB, 'plugin'), path.join(REPO, 'plugin'));",
+      '=== listEntries === E001 | active | global | occ=7 | 2026-08-17~2026-09-10 | ws=SillyTaver',
+      'topKeys=ok,stats,global,projects,disabled rawHead={"ok":true,"stats":{"active":4,"global":',
+      'panel_ids = E001(编码/中文乱码(命令链路/控制台),occ=7) ; E004(编码/中文乱码(命令链路/控制台)',
+      'logged97 statNow ok=0 bad=97 ~\\.dsh\\profiles\\node_modules\\anser <= ENOENT',
+      '== clusters sample (2614-2660) == "clusters": { "1bs4rio": { "cid": "C081", "cat":',
+      '=== lifecycle/selftest.cjs === ok( total occurrences : 56 ok( statement-lines : 55 expectE',
+      'archive-20260909.md rows 1 parsed 1 unparsed 0 disp非空 1 disp空 0 列数分布 {"8":1}',
+      'C001 parts=7 ["C001","encoding","3+","SillyTavern-Agent 等","命令/请求体内联中文被控制台链路破坏',
+      'v 2 lastScan 2026-09-11T03:00:07.431Z files 30 clusters 59 deferred 14 seen 200 nextCandidateId 137',
+      // ← 本条是 v0.7.6 实施当天由"旧宿主进程"（尚未重启、仍是旧签名）漏进来的同类污染，故一并入样本
+      'deferred=5 seen=215 next=137 zahbbc | error | n=1 | [sandbox: file access denied',
+    ];
+    check('A2 回声签名：14 条真实漏网样本全部命中',
+      REAL_LEAKS.every((t) => isMetaEcho(t)), REAL_LEAKS.filter((t) => !isMetaEcho(t)));
+    // 反证集：同机同日的真实报障必须继续进箱 —— 一条都不许被误伤（宁可漏滤不可误伤）
+    const REAL_FAULTS = [
+      '[sandbox: file access denied under workspace-write mode]',
+      '--- 1) DNS --- 20.205.243.166 --- 2) TCP443 --- github.com:443 reachable = False --- 3) 退避重试（最多 3 次）',
+      '--- SSH 认证探测（BatchMode，不会卡在输入）--- exit=255 ssh : git@github.com: Permission denied (publickey).',
+      'Error: tool call timed out after 30000ms',
+      'Error: unknown tool "bash"',
+    ];
+    check('A2 反证：5 条真实故障一条都不误伤',
+      REAL_FAULTS.every((t) => isMetaEcho(t) === false), REAL_FAULTS.filter((t) => isMetaEcho(t)));
+    // A3 出处判定：命令碰过我们的数据产物 + 结果是我们自己渲染的结构化输出 → 判回声
+    const stP = newSessionCtx('s9', 'W');
+    classifyRecord({ type: 'tool/call', time: T0, data: { callId: 'p1', name: 'pwsh', arguments: JSON.stringify({ command: 'Get-Content $env:DSH_HOME\\whale-notebook\\state.json -Raw' }) } }, stP);
+    const ePrint = classifyRecord(evResult('p1', '[stderr] stray\n{ "foo": 1 }\n| a | b | c |', true, T0 + 1), stP);
+    check('A3 出处判定：打印我们的 state.json（结构化输出）被判回声', !!ePrint && ePrint.meta === true, ePrint);
+    // 反证 1：同一出处，但结果是"真实报错"（无渲染痕迹）→ 必须仍进箱
+    const ePlain = classifyRecord(evResult('p1', "ENOENT: no such file or directory, open 'state.json'", true, T0 + 2), stP);
+    check('A3 反证：同一出处的真实报错不被误伤', !!ePlain && ePlain.meta === false, ePlain);
+    // 反证 2：开发我们自己的源码（plugin/src）不算"打印产物" —— 历史上真从自检里发现过框架级 bug
+    const stD = newSessionCtx('s9', 'W');
+    classifyRecord({ type: 'tool/call', time: T0, data: { callId: 'd1', name: 'node', arguments: JSON.stringify({ command: 'node plugin/src/collector/engine.selftest.cjs' }) } }, stD);
+    const eDev = classifyRecord(evResult('d1', 'RangeError: The value of "offset" is out of range\n{ "x": 1 }', true, T0 + 1), stD);
+    check('A3 反证：开发源码时的真实失败仍进箱', !!eDev && eDev.meta === false, eDev);
+    // A3 前提：命令摘要必须跨窗口继承（增量窗口常常只剩 tool/result，没有 tool/call）
+    const cInherit = newSessionCtx('s9', 'W', {}, { x1: 'Get-Content $env:DSH_HOME\\whale-notebook\\inbox.md' });
+    const eInherit = classifyRecord(evResult('x1', '| C001 | error | 1 | W | x | 2026-09-11 10:00 |', true, T0), cInherit);
+    check('A3 命令摘要跨窗口继承（增量扫描仍能判定出处）', !!eInherit && eInherit.meta === true, eInherit);
+    // v0.7.6（审计第 5 项）：live 与批扫必须算出**逐字节相同**的指纹 —— 否则同一物理事件会被两侧各记一次。
+    //   实测依据：25/25 指纹 sid 与磁盘会话目录名一致；本断言把"两条路同一函数、同一身份"钉进单测。
+    const fpOfRec = (ctx) => { const ev = classifyRecord(evResult('c1', ERR1, true, T0 + 1), ctx); return fpOf(ev, clusterKey(ev)); };
+    const fpLive = fpOfRec(newSessionCtx('sess-live', 'LiveBox', { c1: 'pwsh' }));
+    const fpBatch = fpOfRec(newSessionCtx('sess-live', 'LiveBox', { c1: 'pwsh' }, { c1: 'Get-Content inbox.md' }));
+    check('live 与批扫指纹逐字节一致（含命令摘要继承）', typeof fpLive === 'string' && fpLive.indexOf('sess-live|') === 0 && fpLive === fpBatch, { fpLive, fpBatch });
+
     // ---- ② 实时入箱 ----
     const live = createLiveCollector({ logger, flushMs: 5 });
     live.onEvent(SESSION, { type: 'assistant/message', time: T0, data: {} }); // 无关事件
@@ -127,6 +183,13 @@ function evResult(cid, text, isError, t) {
     check('次数累加到 4', (rowOf('C001') || {}).n === '4', rowOf('C001'));
     const stats = live.status();
     check('status 计数（4 条失败事件 / 1 新行 / ≥1 次累加 / 1 会话）', stats.events === 4 && stats.added === 1 && stats.bumped >= 1 && stats.sessions === 1, stats);
+    // v0.7.6（审计第 5 项加固）：同一条事件重复投递（同 sid/时间/文本）= 指纹已见 → 不重复入库
+    live.onEvent(SESSION, evResult('c1', ERR1, true, T0 + 4000));
+    await live.flush();
+    const stats2 = live.status();
+    check('同指纹事件被跳过（skippedByFingerprint ≥ 1）', stats2.skippedByFingerprint >= 1, stats2);
+    check('跳过不改变行数与次数', repo.pendingCount(repo.readInboxText()) === 1 && (rowOf('C001') || {}).n === '4', rowOf('C001'));
+    check('工具名未解析（?）计数为 0：双计唯一残留风险的观测口径', stats2.toolUnknown === 0, stats2);
 
     // ---- ④ 不覆盖 CLI 批扫的水位线 ----
     const stt = repo.readState();

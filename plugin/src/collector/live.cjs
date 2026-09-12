@@ -30,7 +30,12 @@ function createLiveCollector(opts) {
   let timer = null;
   let disposed = false;
   let chain = Promise.resolve(); // 写盘串行化
-  const stats = { events: 0, flushes: 0, added: 0, bumped: 0, silent: 0, dropped: 0, echoGroups: 0, echoEvents: 0, deferredGroups: 0, deferredEvents: 0, skipped: 0, lastFlushAt: 0, lastError: null };
+  const stats = { events: 0, flushes: 0, added: 0, bumped: 0, silent: 0, dropped: 0, echoGroups: 0, echoEvents: 0, deferredGroups: 0, deferredEvents: 0, skipped: 0, lastFlushAt: 0, lastError: null,
+    // v0.7.6（审计第 5 项加固）：把"可能与批扫双计"的两个口径暴露出来 ——
+    //   toolUnknown：工具名没解析出来（'?'）的事件数。tool 是聚簇键的一部分，B == '?' 会让同一物理事件
+    //     在 live 与批扫两侧算出不同聚簇键 → 唯一残留的双计路径。长期为 0 即说明该风险不成立。
+    //   skippedByFingerprint：入库时因"指纹已见"跳过的条数（live 与批扫共用同一指纹的正面证据）。
+    toolUnknown: 0, skippedByFingerprint: 0 };
 
   function ctxOf(session) {
     const sid = String((session && session.id) || '?');
@@ -51,6 +56,7 @@ function createLiveCollector(opts) {
       const ev = classifyRecord(event, ctxOf(session));
       if (!ev) return;
       stats.events++;
+      if (ev.tool === '?') stats.toolUnknown++; // v0.7.6：双计风险的观测口径（见 stats 注释）
       buffer.push(ev);
       if (buffer.length >= MAX_BUFFER) { flush(); return; }
       if (!timer) timer = setTimeout(() => { timer = null; flush(); }, flushMs);
@@ -97,6 +103,7 @@ function createLiveCollector(opts) {
           stats.dropped += ing.dropped || 0;
           stats.echoGroups += ing.echo || 0;
           stats.echoEvents += ing.echoEvents || 0;
+          stats.skippedByFingerprint += ing.dupFingerprints || 0; // v0.7.6：指纹已见 → 不重复入库的正面计数
           stats.deferredGroups += (ing.deferred || []).length;
           stats.deferredEvents += (ing.deferred || []).reduce((n, d) => n + d.n, 0);
           if (ing.added.length) {
