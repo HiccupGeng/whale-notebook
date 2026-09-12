@@ -59,4 +59,10 @@ if (!/var cssNode = ensureCss\(\)/.test(code) || code.indexOf('if (cssNode && cs
 if (code.indexOf('!== null) return null;') === -1) {
   throw new Error('v0.7.3 约定：ensureCss 复用分支必须返回 null（跨代不误删）');
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.7 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收）');
+// v0.7.8 内容断言：待审箱两个新入口（自动收集开关 + 历史深掘）与面板记忆 pin
+for (const s of ['/whale/settings', '/whale/sweep', 'SETTINGS_MODES', '自动收集', 'btnSweep', '⛏', 'sweepMessage', 'sweepSummaryText', 'PIN_KEY', 'openSweepSession', '自动入箱', '仅暂存']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.8 结构: ' + s);
+}
+if (!/var autoAddMode = null/.test(code)) throw new Error('v0.7.8 约定：自动收集初值必须是 null（未知态，等 GET /whale/settings 落到真值）');
+if (!/var showA = pending > 0 \|\| deferred > 0 \|\| readPin\(\)/.test(code)) throw new Error('v0.7.8 约定：面板可见性必须含 pin（否则待审=0 时开关够不着）');
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.8 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收/自动收集开关/⛏历史深掘/面板记忆）');

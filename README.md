@@ -3,7 +3,7 @@
 > **把 DSH 会话里踩过的坑，变成下一个会话不会再踩的规则。**
 > DeepSeek Harness 的自我进化机制：挖掘本机全部会话里反复出现的问题 → 提炼成候选经验 → **经你逐条确认**后写入全局经验库 → 注入 `~/.dsh/AGENTS.md` 自动段（每个新会话自动生效）。
 
-**当前版本 `0.7.7`** ｜ 全部自检 **444 断言全绿**（13 个测试文件 PASS 累计 537） ｜ 用户记忆数据**只在本机、永不入库**
+**当前版本 `0.7.8`** ｜ 全部自检 **486 断言全绿**（16 个测试文件 PASS 累计 609） ｜ 用户记忆数据**只在本机、永不入库**
 
 ---
 
@@ -56,7 +56,7 @@ node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --appl
 | 小本本忘掉 E002 | 停用条目并从自动段移除 |
 | 小本本统计 / 导出 | 统计总览；导出打包（只含通用经验） |
 
-面板（GUI 右缘悬浮件）双卡：**待审箱**（⚡自动处理 / 💬详细讨论 / ✕删除）与**已解决墙**；`⟳` = 先触发增量扫描再刷新（不花 token）。
+面板（GUI 右缘悬浮件）双卡：**待审箱**（⚡自动处理 / 💬详细讨论 / ✕删除 / **⛏历史深掘**）与**已解决墙**；`⟳` = 先触发增量扫描再刷新（不花 token）；页脚另有**「自动收集」开关**（自动入箱 ⇄ 仅暂存，改的是 `settings.autoAdd`，立即生效、无需重启）与**「讨论落点」开关**。**⛏** 一键把全部历史里的坑翻出来直接进待审箱，并自动开一个会话做「历史错误总结 / 该合并哪些 / 该怎么入库」。
 
 ## 目录结构
 
@@ -82,16 +82,18 @@ node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --appl
 ## 验证
 
 ```powershell
-node plugin/lifecycle/selftest.cjs                    # 104 PASS · 含"不碰真实部署"反证
-node plugin/src/ui/server.selftest.cjs                # 45 PASS · 面板 host 逻辑
-node plugin/src/core/privacy.selftest.cjs             # 10 PASS · 打码出口
+node plugin/lifecycle/selftest.cjs                    # 120 PASS · 含"不碰真实部署"反证
+node plugin/src/ui/server.selftest.cjs                # 81 PASS · 面板 host 逻辑（含自动收集开关写路径纪律）
+node plugin/src/core/privacy.selftest.cjs             # 23 PASS · 打码出口
 node plugin/src/core/summarize.selftest.cjs           # 10 PASS · 现象一句话
 node plugin/src/core/similarity.selftest.cjs          # 20 PASS · 同族判定（含「不得误并」反证）
-node plugin/src/collector/engine.selftest.cjs         # 10 PASS · 详情 sidecar 协议
-node plugin/src/collector/engine.dedup.selftest.cjs   # 19 PASS · 已处置签名去重
-node plugin/src/collector/e2e.selftest.cjs            # 60 PASS · zstd 全链端到端
-node plugin/src/collector/live.selftest.cjs           # 28 PASS · 实时采集
+node plugin/src/collector/engine.selftest.cjs         # 38 PASS · 详情 sidecar + 异步/窗口化/维护窗口 + maxNewRows
+node plugin/src/collector/engine.dedup.selftest.cjs   # 24 PASS · 已处置签名去重
+node plugin/src/collector/e2e.selftest.cjs            # 67 PASS · zstd 全链端到端
+node plugin/src/collector/live.selftest.cjs           # 48 PASS · 实时采集
+node plugin/src/collector/sweep.selftest.cjs          # 20 PASS · 历史深掘全链（两阶段/幂等/已处置/上限）
 node plugin/scripts/bundle-smoke.cjs                  # 面板 bundle 桩（结构断言）
+node plugin/scripts/panel-actions.selftest.cjs        # 30 PASS · 面板两个新入口纯函数
 node scripts/redact.test.cjs                          # 22 PASS · 打码回归（含 Bearer/Cookie/URL 凭据/密钥名）
 ```
 
@@ -101,6 +103,7 @@ node scripts/redact.test.cjs                          # 22 PASS · 打码回归�
 
 | 版本 | 一句话 |
 |---|---|
+| `0.7.8` | **待审箱两个新入口**：① 页脚**「自动收集」开关**（`自动入箱`｜`仅暂存` = `settings.autoAdd`，新增 `GET/POST /whale/settings`；**只写 `settings.json`**、严格读防"读-改-写吃掉其它设置"、原子写、键白名单，**不写 AGENTS.md**——提醒句改成"以 `--check` 输出为准"的双模式自述）② 页头 **⛏「历史深掘」**（`POST /whale/sweep` = `--add` 保底 + `--rebuild --add` 全量重扫全部历史直接入箱；已处置不复活、在箱候选只累加不重复开行；单轮开行上限 30→**500** 并显式报 `dropped`；完成后**自动开一个新会话**做历史错误总结/同族合并建议/入库草案）③ **面板记忆 pin**（主动开过面板后待审为 0 也保留入口，否则开关够不着） |
 | `0.7.5` | **端点闸门**（8 个 `/whale/*` 统一校验 Host 回环 / Origin / `Sec-Fetch-Site` / 写操作必须 JSON → 跨站副作用与 DNS rebinding 读数据均被拒）· **采集健康度可观测**（zstd 能力探测、帧扫描边界检查、中段坏帧分类与 `badRounds`/`stuckFiles`、`/whale/live` 新增 `zstd`/`scan`/`diag`） |
 | `0.7.6` | **回声自我放大治理**（回声落档改「稳定签名 + 幂等追加」，签名 = `类别\|一句话(≤90字)`；补 `META_ARTIFACT` 产物标识签名与「按出处整类拦截」；当日分片超 400 行自动轮转）· **暂存污染清理** `mine.cjs --forget-echo [--apply]`（实测 18 组里 13 组＝72% 是自引用输出，清理后剩 5 组真实发现）· **双计口径加固**（实测 live 与批扫指纹逐字节一致、无双计；改为把 `toolUnknown`/`skippedByFingerprint` 与不变量断言钉住结论） |
 | `0.7.7` | **扫描让出事件循环**（`scanHistory`/`runScanInner` 改生成器 + 双驱动；宿主在让出点 `await setImmediate`；**大日志按 256KB 窗口续读** —— 第一版实测宿主仍卡 3857ms，修正后**最大卡顿 69ms**；`/whale/live` 增 `scanJob`，卸载即取消并保证释放锁）· **`--rebuild` 维护窗口**（标记文件 + TTL 兜底，实时采集让路但不丢事件、`heldByMaintenance` 可见）· **漂移分级**（`lifecycle check` 只在缺失/结构损坏/孤儿/待迁移时 exit 1，合法演进＝「待登记」exit 0；新增 `check --adopt`；**AGENTS 迁 `zones` 模式**，区外是你自己的内容、`remove` 只剥区不删整文件） |

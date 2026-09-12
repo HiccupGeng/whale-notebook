@@ -1,7 +1,51 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.7`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.8`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+
+## v0.7.8（2026-09-12）待审箱两个新入口：自动收集开关 · 历史深掘
+
+**起因**：用户需求 —— 「在待审箱页面上加两个按钮：① 开关：开启/关闭自动收集待审核条目；② 自动开启新的 Session，扫描历史记录、抓取历史所有错误、总结后放到待审箱里。」梳理结论：**两件事都不需要新引擎**，分别落在已有的 `settings.autoAdd`（拉取式 ⇄ 自动入箱）与已有的 `mine.cjs --rebuild --add`（从头梳理全部历史、直接入箱）上，中间只缺"把开关搬上面板"和"一键触发 + 让模型做总结"。
+
+### ① 「自动收集」开关（`repo.cjs` + `ui/server.cjs` + `lib/index.js`）
+
+**语义**（与引擎口径**同源**）：`settings.autoAdd` —— `false`＝拉取式（扫描照常、零 token，但新发现只写 `state.deferred` 暂存，说「小本本复盘」才入箱）；`true`＝自动入箱（扫描/实时发现的问题直接写进待审箱）。生效值取 `settings.autoAdd !== false`（**缺键＝默认开启**，与 `engine` 的 `settings.autoAdd === false` 判定逐字一致，不是"缺键=关闭"）。
+
+**写路径纪律**（为什么值得单开一节）：新增 `repo.readSettingsStrict()` 而不是复用 `readSettings()` —— 后者解析失败时**静默返回 `{}`**，面板一旦"读-改-写"就会把用户其它开关（`scanMode`/`liveCapture`/`maxDeferred`…）整批吃掉。严格读区分"文件不存在＝默认值"与"内容损坏＝报错"，且损坏时**不改名、不覆盖**（`settings.json` 只有几百字节，改名备份只会让人更慌，这一点与 `state.json` 的 `readJsonStrict` 刻意不同）。写入走 `repo.writeSettings`（本进程独有 tmp + rename，审计 N5 口径）。端点只开放 `autoAdd` 一个键（`SETTINGS_WRITABLE` 白名单，未知键 400），不做"任意设置后门"。
+
+**重启后实测发现并当场修掉的一处副作用**：`writeSettings` 起初复用 `writeJson`（即 `state.json` 那套 **1 空格**机器样式），于是**面板第一次切换会把用户手写的 2 空格 `settings.json` 重排**——键值一个不丢、`_comment` 说明也完整保留，但"点一下开关，配置文件排版就变了"是没必要的副作用（它是用户会手动编辑的配置文件，不是机器状态）。改为 `JSON.stringify(obj, null, 2) + '\n'` 写回，并加断言钉住"写回保持人读样式"；现场文件已按原样式复原（13 键、语义逐键一致）。这条修复与其余源码一起**已部署，随下一次重启生效**（对现状无影响：只影响下一次写入时的缩进）。
+
+**关键决策：开关不写 AGENTS.md。** 提醒句原本是"随 `autoAdd` 二选一"（v0.6 语义），开关一变就会与注入文本矛盾。备选是"点一次开关就改写 AGENTS 自动段"，被否决：那意味着每次点击都动用户的全局记忆文件、并与 agent 入库编辑抢写、还会把 lifecycle 的标记区基线打成「待登记」。改为把提醒句一次性改写成**双模式自述**（`inject/agents.cjs`）：以「**本轮是自动入箱还是仅暂存，以 `--check` 的命令输出为准**（`settings.autoAdd`，面板「自动收集」开关可切）」开头，再分别写明两种输出对应的纪律 —— 注入文本永远不撒谎（命令输出本身就区分「新发现 N 条」/「新发现暂存 N 组」），而开关切换**一个字节都不碰 AGENTS.md**，也不再需要为它跑 `--adopt`。
+
+### ② 「历史深掘」按钮（`engine.cjs` + `lib/index.js` + `lib/client.js`）
+
+**语义**：`POST /whale/sweep` ＝ 两阶段 ——
+- **阶段① `--add`**：先把已有暂存冲进待审箱。为什么必须有：阶段② 的 `--rebuild` 会清空 `state.deferred`，不先冲一遍，"日志已轮转/已删除"的老发现就再也回不来（保底不丢件）；
+- **阶段② `--rebuild --add`**：清空水位线/指纹/聚簇后**从头梳理全部历史**，`add=true` 覆盖拉取式**直接入箱**。
+
+**为什么是 `--rebuild` 而不是 `--full`**：`--full` 保留指纹，当前暂存的那些历史发现"已见"→ 会被跳过，因而进不了箱；只有重建才是"历史抓一遍"。
+**保护不变**：① `archive/` 已处置签名在重建时**不剔除** → 归档/入库过的坑不复活；② 在箱候选走"同类+同现象认领"（`adoptBy`）与聚簇累加 → 只加次数、不新开重复行；③ 编号下限取 `max(在箱, 归档)+1` → 不撞号。
+**单轮开行上限**：默认 30，深掘传 **500**。理由：重建时"超出上限被丢弃"会**同时记下指纹**＝永久抓不到，与"抓取历史所有的错误"直接冲突；真超了 `dropped` 会在返回体与面板状态行/toast 里显式暴露，不静默丢。为此把 `opts.maxNewRows` 从 `runScanTail` 透传到 `ingestFresh`（**不传＝仍 30，既有调用零行为变化**）。
+**并发与可观测**：与 `/whale/scan` **共用** `scanning` 互斥位（占用中 409）；运行期沿用 v0.7.7 的"让出事件循环 + rebuild 维护窗口"（实时采集让路但不丢事件）；`/whale/live` 的 `scanJob` 带 `kind:'sweep'` 与 `phase`（flush/rebuild）。`{"dry":true}` = **只读预演**（零写盘、不开维护窗口），供 curl 验收与自测。
+
+### ③ 面板两个控件（`lib/client.js`，刷新页面即生效）
+
+- 待审箱页头 ✅ 与 ⟳ 之间新增 **⛏**（title 写明：全量重扫全部历史 → 抓所有历史错误 → 直接入待审箱 → 自动开一个总结会话）；运行中置灰 + 转 `⛏…`。
+- 页脚 `讨论落点` 下方新增 **`自动收集 [自动入箱｜仅暂存]`**（复用 `.wh-seg` 样式）；**状态取自服务端** `GET /whale/settings`（不是 localStorage —— 它改的是真实采集行为），读失败时面板显示未知态并 toast，不假装成功。
+- 页脚第三行改成**动态状态行**：深掘中每 1.2s 轮询 `/whale/live` 显示「⛏ 深掘中（全量重扫）：已扫 12/32 个日志｜3.4MB…」，完成后留 20s 显示「⛏ 新开 3｜累加 5｜压掉 2｜回声过滤 4 组｜52.28MB｜11.5s」。
+- **自动开新会话做总结**：深掘成功后按 💬 同一套通路（`ensureGlobalWorkspace` → `sessions.create` → `prompt` → `sessions.open`）新建会话，落点固定**鲸鱼全局**（历史深掘天生跨全部工作区，与"跨项目候选→鲸鱼全局"同源；工作区不可用则回退当前工作区并报依据）。开局消息由 `sweepMessage()` 生成：扫描统计＋入箱/累加/压掉/回声四个数字＋待审清单（≤20 条，其余只报数量）＋落点依据＋**只读约束**（不写 entries/INDEX/AGENTS/inbox，等用户逐条确认）＋"不要重复跑 `--rebuild`"。**无新发现且待审为空时不开会话**（不白烧 token），只 toast。
+- **面板记忆（pin）**：用户主动展开过面板后，即使待审为 0 也保留侧边入口（`localStorage['whale.panelPin']`，计数为 0 时不挂红徽）。为什么必须加：开关就在这张卡上，而"待审=0 且要切换的模式正是自动入箱"恰好会让整块面板消失 —— 那正是最需要开关的时候。只由用户主动点击置位，对"从没开过面板"的人仍是原来那套不打扰行为。
+
+### 验证
+
+- **`server.selftest` 63 → 82（+19）**：缺键默认开启 / payload 形状 / 生效值口径与引擎同源 / 同值再点 `changed:false` 且不创建文件 / **切开关逐键保留用户其它设置** / **绝不触碰 AGENTS.md（逐字节）** / 原子写不留 `.tmp` / 非布尔与未知键一律 400 / 参数非法一个字节都不写 / **损坏 settings → 500 且文件未覆盖未改名**。
+- **`engine.selftest` 35 → 38（+3）**：`maxNewRows` 生效（=2 → 只开 2 行、其余记 dropped）、深掘上限 500 下全开、不传参数仍是旧口径（30）。
+- **新增 `sweep.selftest`（20 断言，独立临时 home 的异步端到端）**：拉取式下 `--check` 只暂存 → **dry 预演零写盘且不开维护窗口** → 阶段① `--add` 暂存全部入箱（含 sidecar）→ 阶段② `--rebuild --add` 全部被认领（`added=0`、箱子行数不变、`cat|text` 无重复）→ **二次深掘幂等** → **删掉的候选被归档签名压掉、不复活** → **上限=2 时丢弃 3 条、放大到 500 后全部补回** → 收尾无锁/无维护窗口/无 `.tmp`。
+- **新增 `panel-actions.selftest`（30 断言）**：两态表与 `autoAdd` 布尔一一对应 / pin 三态降级（无 storage、非法值、抛错）/ 深掘结果行 / **深掘开局消息**（统计、四个数字、清单 ≤20 条、只读约束齐备、"不要重复运行 --rebuild"、`dropped>0` 时必须告知用户）。
+- `bundle-smoke` 增 v0.7.8 结构断言（`/whale/settings`、`/whale/sweep`、`SETTINGS_MODES`、`btnSweep`、`sweepMessage`、`PIN_KEY`、以及两条约定：开关初值必须为 `null` 未知态、面板可见性必须含 `readPin()`）。
+
+**验证汇总**：11 套件 **486 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＋ `panel-actions.selftest` 30 ＝ 16 个测试文件 PASS 累计 **609**（2026-09-12）。新增/变化：`server` 63→82、`engine` 35→38、`sweep` 新增 20、`panel-actions` 新增 30。
+**生效**：`settings`/`sweep` 两个端点与 `--rebuild` 的开关口径属**宿主半边** → 先 `deploy-web.cjs --apply` 再重启 `dsh web`；面板两个控件只改 `lib/client.js` → 刷新页面即可。数据文件**零新增结构**（`settings.json`/`state.json` 无迁移）。
 
 ## v0.7.7（2026-09-12）扫描让出事件循环 · rebuild 维护窗口 · 漂移分级与 check --adopt
 
@@ -261,15 +305,16 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 | 套件 | 断言数 |
 |---|---|
 | `plugin/lifecycle/selftest.cjs` | 120 |
-| `plugin/src/ui/server.selftest.cjs` | 63 |
+| `plugin/src/ui/server.selftest.cjs` | 82 |
 | `plugin/src/core/privacy.selftest.cjs` | 23 |
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
 | `plugin/src/store/repo.selftest.cjs` | 34 |
-| `plugin/src/collector/engine.selftest.cjs` | 35 |
+| `plugin/src/collector/engine.selftest.cjs` | 38 |
 | `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
 | `plugin/src/collector/e2e.selftest.cjs` | 67 |
 | `plugin/src/collector/live.selftest.cjs` | 48 |
-| **合计** | **444**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **537**） |
+| `plugin/src/collector/sweep.selftest.cjs` | 20 |
+| **合计** | **486**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 + `scripts/panel-actions.selftest.cjs` 30 ＝ 16 个测试文件 PASS 累计 **609**） |
 
-最近一次全绿：**2026-09-12**（v0.7.7）。
+最近一次全绿：**2026-09-12**（v0.7.8）。

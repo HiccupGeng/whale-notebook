@@ -222,6 +222,77 @@ try {
   check('v0.7.5 GET 不要求 Content-Type', G({ method: 'GET', headers: { host: '127.0.0.1:3080' } }).ok === true);
   check('v0.7.5 非法 Origin 字面量 → 403', G({ method: 'GET', headers: { host: '127.0.0.1:3080', origin: 'not-a-url' } }).ok === false);
 
+  // ============ v0.7.8：面板「自动收集」开关（settings.autoAdd）============
+  // 语义与 engine 完全同源：生效值 = (settings.autoAdd !== false)，缺键＝默认 true（自动入箱）。
+  const settingsPath = path.join(nb, 'settings.json');
+  const agentsPath = path.join(tmp, 'AGENTS.md');
+  const AGENTS_SENTINEL = '# 全局指令\n\n## 手动段（用户自写区）\n\n（用户内容，任何开关都不得改动）\n\n<!-- whale-notebook:rules -->\n占位\n<!-- /whale-notebook/rules -->\n';
+  fs.writeFileSync(agentsPath, AGENTS_SENTINEL, 'utf8');
+
+  // ① 缺键（文件不存在）→ 默认 true，且 payload 形状稳定
+  check('v0.7.8 缺 settings.json → 默认自动入箱（true）', fs.existsSync(settingsPath) === false && server.settingsPayload().autoAdd === true, server.settingsPayload());
+  const sp0 = server.settingsPayload();
+  check('v0.7.8 payload 形状：开关+只读回显+白名单',
+    sp0.ok === true && sp0.autoCollect === true && sp0.liveCapture === true && sp0.scanMode === 'incremental'
+    && Array.isArray(sp0.writable) && sp0.writable.join(',') === 'autoAdd', sp0);
+  check('v0.7.8 生效值口径与 engine 同源（只有显式 false 才算关闭）',
+    server.effectiveAutoAdd({}) === true && server.effectiveAutoAdd({ autoAdd: true }) === true && server.effectiveAutoAdd({ autoAdd: false }) === false);
+
+  // ② 缺键 + 点「自动入箱」→ 无变化、不写盘（不无谓创建文件）
+  const sw0 = server.updateAutoAdd({ autoAdd: true });
+  check('v0.7.8 已是该模式 → changed:false 且不创建文件', sw0.ok === true && sw0.changed === false && sw0.autoAdd === true && fs.existsSync(settingsPath) === false, sw0);
+
+  // ③ 写入其它开关（哨兵）后切换 → 既不能丢用户其它设置，也不能碰 AGENTS.md
+  const sentinel = { autoCollect: true, scanMode: 'full', maxDeferred: 42, denylistWorkspaces: ['X'], autoAdd: true };
+  fs.writeFileSync(settingsPath, JSON.stringify(sentinel, null, 2), 'utf8');
+  const sw1 = server.updateAutoAdd({ autoAdd: false });
+  const after1 = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  check('v0.7.8 切到「仅暂存」→ changed:true + autoAdd=false', sw1.ok === true && sw1.changed === true && sw1.autoAdd === false, sw1);
+  check('v0.7.8 其它设置逐键保留（读-改-写不吃用户配置）',
+    after1.scanMode === 'full' && after1.maxDeferred === 42 && JSON.stringify(after1.denylistWorkspaces) === '["X"]' && after1.autoCollect === true, after1);
+  check('v0.7.8 回显计数（pending/deferred）随开关一起返回', Number.isInteger(sw1.pending) && Number.isInteger(sw1.deferred), sw1);
+  // v0.7.8 加固：settings.json 是**用户会手动编辑的配置文件**，写回必须保持人读样式（2 空格缩进 + 结尾换行），
+  // 而不是 state.json 那种 1 空格机器样式 —— 否则"点一下开关，配置文件排版就变了"。
+  const raw1 = fs.readFileSync(settingsPath, 'utf8');
+  check('v0.7.8 写回保持人读样式（2 空格缩进 + 结尾换行）', /^\{\n {2}"/.test(raw1) && raw1.endsWith('}\n'), JSON.stringify(raw1.slice(0, 12)));
+  check('v0.7.8 开关绝不触碰 AGENTS.md（逐字节一致）', fs.readFileSync(agentsPath, 'utf8') === AGENTS_SENTINEL);
+  check('v0.7.8 原子写不留 .tmp', fs.readdirSync(nb).filter((f) => f.endsWith('.tmp')).length === 0, fs.readdirSync(nb));
+
+  // ④ 幂等：同值再点一次 → changed:false 且文件字节不变
+  const bytesBefore = fs.readFileSync(settingsPath);
+  const sw2 = server.updateAutoAdd({ autoAdd: false });
+  check('v0.7.8 同值再点 → changed:false 且文件字节不变',
+    sw2.ok === true && sw2.changed === false && Buffer.compare(bytesBefore, fs.readFileSync(settingsPath)) === 0, sw2);
+
+  // ⑤ 切回自动入箱 → 生效值随 payload 变化
+  const sw3 = server.updateAutoAdd({ autoAdd: true });
+  check('v0.7.8 切回自动入箱 → payload 回读一致',
+    sw3.ok === true && sw3.changed === true && server.settingsPayload().autoAdd === true, { sw3, p: server.settingsPayload() });
+
+  // ⑥ 参数校验：非布尔 / 未知键 / 空 body 一律 400，且不写盘
+  const bytesAfterSw3 = fs.readFileSync(settingsPath);
+  const bad1 = server.updateAutoAdd({ autoAdd: 'yes' });
+  const bad2 = server.updateAutoAdd({ autoAdd: true, scanMode: 'full' });
+  const bad3 = server.updateAutoAdd(null);
+  const bad4 = server.updateAutoAdd({});
+  check('v0.7.8 非布尔 → 400 且报错', bad1.ok === false && bad1.code === 400 && bad1.error.indexOf('布尔') !== -1, bad1);
+  check('v0.7.8 未知键 → 400（只开放 autoAdd，不做任意设置后门）', bad2.ok === false && bad2.code === 400 && bad2.error.indexOf('未知键') !== -1, bad2);
+  check('v0.7.8 空 body/null → 400', bad3.ok === false && bad3.code === 400 && bad4.ok === false && bad4.code === 400, { bad3, bad4 });
+  check('v0.7.8 参数非法时一个字节都不写（文件仍等于上次成功写入的字节）',
+    Buffer.compare(bytesAfterSw3, fs.readFileSync(settingsPath)) === 0 && server.settingsPayload().autoAdd === true);
+
+  // ⑦ 损坏的 settings.json：报错、**不改名也不覆盖**（否则"点一下开关"会吃掉用户全部设置）
+  fs.writeFileSync(settingsPath, '{ "autoAdd": false, ', 'utf8');
+  const corruptBytes = fs.readFileSync(settingsPath);
+  const c1 = server.updateAutoAdd({ autoAdd: true });
+  let c2 = null;
+  try { server.settingsPayload(); } catch (err) { c2 = err; }
+  check('v0.7.8 损坏 settings → 500 且提示未写入', c1.ok === false && c1.code === 500 && c1.error.indexOf('损坏') !== -1, c1);
+  check('v0.7.8 损坏文件保持原样（未覆盖、未改名 .corrupt-*）',
+    Buffer.compare(corruptBytes, fs.readFileSync(settingsPath)) === 0 && fs.readdirSync(nb).filter((f) => f.indexOf('.corrupt-') !== -1).length === 0,
+    fs.readdirSync(nb));
+  check('v0.7.8 损坏时 GET 读路径明确抛错（不假装成功）', !!c2 && c2.message.indexOf('损坏') !== -1, c2 && c2.message);
+
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

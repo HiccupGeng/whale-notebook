@@ -44,6 +44,51 @@ function listPayload() {
   return { ok: true, pending: vm.pending, rows, deferred: Object.keys(state.deferred || {}).length };
 }
 
+// ---- v0.7.8：面板「自动收集」开关（GET/POST /whale/settings）----
+// 语义：settings.autoAdd ——
+//   false = 拉取式：扫描照常（零 token）但新发现只写 state.deferred 暂存，说「小本本复盘」（mine.cjs --add）才入箱；
+//   true  = 自动入箱：扫描/实时发现的问题直接写入待审箱。
+//   缺键按默认 true —— 与 engine 的判定口径 `settings.autoAdd === false` 完全一致（不是"缺键=false"）。
+// 写路径纪律（为什么值得单开一节）：
+//   ① 用 readSettingsStrict 而不是 readSettings：后者解析失败静默返回 {}，一旦"读-改-写"会把用户
+//      其它开关（scanMode/liveCapture/maxDeferred…）整批吃掉；损坏时这里**报错且一个字节都不写**。
+//   ② 只动 settings.json —— 不碰 AGENTS.md（提醒句口径已在 inject/agents.cjs 内改成"以命令输出为准"
+//      的双模式自述，所以切换开关不需要改写用户的全局记忆文件，也不会污染 lifecycle 的标记区基线）。
+//   ③ 原子写（repo.writeSettings → writeJson：本进程独有 tmp + rename，见审计 N5）。
+// 未知键一律拒绝：本版只开放 autoAdd，避免面板变成"偷偷改任意设置"的后门。
+const SETTINGS_WRITABLE = ['autoAdd'];
+function effectiveAutoAdd(s) { return (s && s.autoAdd) !== false; }
+function settingsPayload() {
+  const s = repo.readSettingsStrict();
+  return {
+    ok: true,
+    autoAdd: effectiveAutoAdd(s),
+    autoCollect: s.autoCollect !== false,
+    liveCapture: s.liveCapture !== false,
+    scanMode: s.scanMode === 'full' ? 'full' : 'incremental',
+    writable: SETTINGS_WRITABLE.slice(),
+  };
+}
+function updateAutoAdd(body) {
+  const b = body || {};
+  const unknown = Object.keys(b).filter((k) => SETTINGS_WRITABLE.indexOf(k) === -1);
+  if (unknown.length) return { ok: false, code: 400, error: `本版只开放 ${SETTINGS_WRITABLE.join('/')}（收到未知键: ${unknown.join(', ')}）` };
+  if (typeof b.autoAdd !== 'boolean') return { ok: false, code: 400, error: 'body 需含布尔 { autoAdd: true | false }' };
+  let s;
+  try { s = repo.readSettingsStrict(); }
+  catch (err) { return { ok: false, code: 500, error: (err && err.message) || String(err) }; }
+  const before = effectiveAutoAdd(s);
+  const counts = () => ({
+    pending: repo.pendingCount(repo.readInboxText()),
+    deferred: Object.keys(repo.readState().deferred || {}).length,
+  });
+  if (before === b.autoAdd) return Object.assign({ ok: true, changed: false, autoAdd: before }, counts());
+  s.autoAdd = b.autoAdd;
+  try { repo.writeSettings(s); }
+  catch (err) { return { ok: false, code: 500, error: `settings.json 写入失败：${(err && err.message) || String(err)}` }; }
+  return Object.assign({ ok: true, changed: true, autoAdd: b.autoAdd }, counts());
+}
+
 // v0.7 GET /whale/related?id=C###：讨论某条候选时，程序给出确定依据（不靠模型猜测）
 //   family   = 该候选所属族：由 state.clusters 里 cid 指向本行的全部聚簇构成（族合并的成员）
 //   related  = 其它在箱候选里相似度 ≥0.35 的（降序，取前 5）——「还有类似的」这句话的确定性来源
@@ -187,4 +232,9 @@ function guardRequest(input, opts) {
   return { ok: true };
 }
 
-module.exports = { ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate, solvedPayload, entryPayload, relatedPayload, guardRequest, isLoopbackHostHeader };
+module.exports = {
+  ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate,
+  solvedPayload, entryPayload, relatedPayload, guardRequest, isLoopbackHostHeader,
+  // v0.7.8：面板开关（settings.autoAdd）
+  SETTINGS_WRITABLE, effectiveAutoAdd, settingsPayload, updateAutoAdd,
+};

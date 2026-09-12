@@ -1,9 +1,11 @@
-// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.6：实时采集 + 决策箱面板 API + 拉取式暂存）
+// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.7.8：实时采集 + 决策箱面板 API + 拉取式暂存 + 自动收集开关 + 历史深掘）
 // 浏览器半边见 ./client.js（panel bundle，经 package.json dsh.client 声明由 client-modules 收录）。
 // host half 职责：
 //   ① 实时采集：订阅 DSH 会话事件总线 `session/event`，把「工具失败/特征」当场判出入待审箱
 //      （判定与批扫共用 collector/scanner.cjs + engine.ingestFresh，零模型 token；见 src/collector/live.cjs）；
 //   ② 经 webServer 注册 /whale/* JSON 端点；业务纯逻辑在 src/ui/server.cjs。
+// v0.7.8 新增：GET/POST /whale/settings（面板「自动收集」= settings.autoAdd 开关）、
+//   POST /whale/sweep（面板 ⛏「历史深掘」= --add 保底 + --rebuild --add 全量重扫历史入箱）。
 // 注意：新增/改动本文件的宿主能力需要重启 dsh web 才生效（浏览器半边 client.js 只需刷新页面）；
 // 行注入用 profiles/web/cordis.patch.yml（deploy-web.cjs 管理）。会话平面能力另见 src/ui/contracts.md。
 import server from '../src/ui/server.cjs';
@@ -12,7 +14,7 @@ import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 import { zstdAvailable } from '../src/collector/decoder.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.7' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.8' };
 
 function sendJson(res, code, obj) {
   try {
@@ -158,6 +160,31 @@ export function apply(ctx) {
     }),
   }), 'whale-notebook: GET /whale/related');
 
+  // ---- v0.7.8：面板「自动收集」开关（settings.autoAdd：拉取式 ⇄ 自动入箱）----
+  // 只开放 autoAdd（server.SETTINGS_WRITABLE 白名单）；写路径 = 严格读 + 原子写，
+  // 损坏的 settings.json 明确报错且一个字节都不写；**全程不触碰 AGENTS.md**（提醒句口径已在
+  // src/inject/agents.cjs 内改成"以命令输出为准"的双模式自述，所以切开关不需要改写全局记忆文件）。
+  ctx.effect(() => web.register({
+    kind: 'exact',
+    path: '/whale/settings',
+    handler: wrap(async (req, res) => {
+      if (req.method === 'GET') {
+        try { return sendJson(res, 200, server.settingsPayload()); }
+        catch (err) { return sendJson(res, 500, { ok: false, error: (err && err.message) || String(err) }); }
+      }
+      if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err && err.message ? err.message : String(err) });
+      }
+      const out = server.updateAutoAdd(body);
+      if (!out.ok) return sendJson(res, out.code || 400, out);
+      sendJson(res, 200, out);
+    }),
+  }), 'whale-notebook: GET/POST /whale/settings');
+
   // ---- v0.5：面板 ⟳ 触发的增量扫描（先把实时缓冲落盘，再按水位线扫新增）----
   // v0.7.7（审计第 2 项）：改走 `engine.runScanAsync` —— 扫描主体按"每 8 个文件 / 每 4MB"让出事件循环，
   //   全量扫描（实测 44MB ≈5s）期间宿主不再被独占（面板其它端点、实时采集去抖器、GUI 都照常响应）。
@@ -201,6 +228,76 @@ export function apply(ctx) {
     }),
   }), 'whale-notebook: POST /whale/scan');
 
+  // ---- v0.7.8：「历史深掘」（面板 ⛏ 触发）----
+  // 语义 = 把**全部历史里出现过的错误**一次性挖出来并直接放进待审箱（需求②的宿主半边）：
+  //   阶段① `--add`：先把已有暂存（拉取式下的 state.deferred）冲进待审箱 —— 阶段② 的 --rebuild
+  //          会清空暂存，不先冲一遍，"日志已轮转/已删除"的老发现就再也回不来了（保底不丢件）；
+  //   阶段② `--rebuild --add`：清空水位线/指纹/聚簇后从头梳理全部历史；add=true 覆盖拉取式直接入箱。
+  //   已处置保护不变：archive 签名在重建时**不剔除** —— 归档过/入库过的坑不会被重新开行；
+  //   在箱候选走"同类+同现象认领"与聚簇累加，只加次数不新开重复行；编号下限取 max(在箱,归档)+1。
+  //   单轮开行上限提到 500（默认 30）：重建时"超出上限被丢弃"会同时记下指纹 = 永久抓不到，
+  //   与"抓取历史所有的错误"直接冲突；真超了 dropped 会在返回体与面板 toast 里显式暴露，不静默丢。
+  //   dry=true = 只读预演（零写盘、不开维护窗口）：供 curl 验收与自测，不动用户数据。
+  // 与 /whale/scan 共用 scanning 互斥位（两者都是整机扫描，同时跑只会互相等锁）。
+  const SWEEP_MAX_NEW_ROWS = 500;
+  ctx.effect(() => web.register({
+    kind: 'exact',
+    path: '/whale/sweep',
+    handler: wrap(async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      let body = null;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err && err.message ? err.message : String(err) });
+      }
+      const dry = !!(body && body.dry === true);
+      if (scanning) return sendJson(res, 409, { ok: false, error: '扫描/深掘进行中，请稍后重试' });
+      scanning = true;
+      const t0 = Date.now();
+      scanJob = { running: true, kind: 'sweep', dry, phase: 'flush', startedAt: t0, files: 0, scanned: 0, skipped: 0, readBytes: 0, ms: 0 };
+      const ctl = {
+        cancelled: () => scanCancelled,
+        onProgress: (p) => { if (scanJob) Object.assign(scanJob, p, { ms: Date.now() - scanJob.startedAt }); },
+      };
+      try {
+        if (live) { try { await live.flush(); } catch (err) { /* 实时落盘失败不阻断深掘 */ } }
+        let flush = null;
+        if (!dry) {
+          const f = await engine.runScanAsync('--add', { maxNewRows: SWEEP_MAX_NEW_ROWS, ctl });
+          flush = f.ok
+            ? { added: f.data.added.length, bumped: f.data.bumped.length, suppressed: f.data.suppressed.length, dropped: f.data.dropped || 0, remaining: f.data.remaining }
+            : { error: f.text }; // 阶段①失败不致命（暂存为空/无归档都能继续），原因带回给面板
+        }
+        if (scanJob) scanJob.phase = 'rebuild';
+        const out = await engine.runScanAsync('--rebuild', { add: true, dry, maxNewRows: SWEEP_MAX_NEW_ROWS, ctl });
+        if (!out.ok) return sendJson(res, 500, { ok: false, error: out.text, flush });
+        const d = out.data;
+        sendJson(res, 200, {
+          ok: true,
+          dry,
+          flush,
+          added: d.added.length,
+          bumped: d.bumped.length,
+          suppressed: d.suppressed.length,
+          dropped: d.dropped || 0,
+          echo: d.echo || 0,
+          echoEvents: d.echoEvents || 0,
+          echoDupSkipped: d.echoDupSkipped || 0,
+          pending: d.pending,
+          deferredTotal: d.deferredTotal || 0,
+          ms: d.ms,
+          wallMs: Date.now() - t0,
+          scan: d.scan,
+          text: out.text,
+        });
+      } finally {
+        scanning = false;
+        scanJob = null;
+      }
+    }),
+  }), 'whale-notebook: POST /whale/sweep');
+
   // ---- v0.5：运行状态（自检/排障：实时采集是否生效、水位线与聚簇规模）----
   ctx.effect(() => web.register({
     kind: 'exact',
@@ -231,11 +328,17 @@ export function apply(ctx) {
         // v0.7.6（审计第 5 项加固）：与批扫"是否双计"的两个口径 ——
         //   toolUnknown（应为 0）与 skippedByFingerprint（>0 说明 live 与批扫共用同一指纹）
         dedup: liveStatus ? { toolUnknown: liveStatus.toolUnknown || 0, skippedByFingerprint: liveStatus.skippedByFingerprint || 0 } : null,
+        // v0.7.8：面板「自动收集」开关的当前值（缺键按默认 true）。settings.json 损坏时这里只报错，
+        //   不让 /whale/live 整条挂掉（它同时是排障入口）。
+        settings: (() => {
+          try { return server.settingsPayload(); }
+          catch (err) { return { ok: false, error: (err && err.message) || String(err) }; }
+        })(),
       });
     }),
   }), 'whale-notebook: GET /whale/live');
 
-  ctx.logger.info(`[whale-notebook] v${PACKAGE.version} 决策箱面板 API 已注册：GET /whale/inbox, GET /whale/inbox/detail, GET /whale/solved, GET /whale/entry, GET /whale/live, POST /whale/inbox/delete, POST /whale/scan`);
+  ctx.logger.info(`[whale-notebook] v${PACKAGE.version} 决策箱面板 API 已注册：GET /whale/inbox, GET /whale/inbox/detail, GET /whale/solved, GET /whale/entry, GET /whale/related, GET /whale/live, GET /whale/settings, POST /whale/inbox/delete, POST /whale/scan, POST /whale/settings, POST /whale/sweep`);
 }
 
 export default { apply, name: PACKAGE.name, version: PACKAGE.version };

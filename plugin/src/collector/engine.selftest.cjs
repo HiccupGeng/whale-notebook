@@ -175,6 +175,28 @@ for (let i = 0; i < 9; i++) {
   fsx.writeFileSync(pathx.join(d, 'session.jsonl.zstd'), zlibx.zstdCompressSync(Buffer.from(line, 'utf8')));
 }
 
+// ---- v0.7.8（面板「历史深掘」）：单轮开行上限可由 opts.maxNewRows 指定 ----
+// 为什么需要：--rebuild 的默认上限是 30，超出即"丢弃 + 记指纹"= **永久抓不到**；面板深掘要
+//   "抓取历史所有的错误"，所以把它开到 500 并让 dropped 显式暴露。这里用 dry 直连 ingestFresh
+//   验证"上限真的生效/真的可放开"，不动任何现场文件。
+{
+  const { ingestFresh: ingF } = require('./engine.cjs');
+  const mkEv = (i) => ({ cat: 'error', tool: 'Bash', sid: 's-' + i, at: T0 + i, ws: 'W8', text: 'v0.7.8 fixture distinct failure #' + i });
+  const evs = [0, 1, 2, 3, 4].map(mkEv);
+  const stCapped = repo2.emptyState();
+  const capped = ingF(evs, stCapped, { autoAdd: true }, { dry: true, add: true, maxNewRows: 2 });
+  check('v0.7.8 单轮上限生效：maxNewRows=2 → 只开 2 行、其余记 dropped（不静默）',
+    capped.added.length === 2 && capped.dropped === 3, { added: capped.added.length, dropped: capped.dropped });
+  const stFull = repo2.emptyState();
+  const full = ingF(evs, stFull, { autoAdd: true }, { dry: true, add: true, maxNewRows: 500 });
+  check('v0.7.8 深掘上限（500）下 5 条各不相同的事件全部开行',
+    full.added.length === 5 && full.dropped === 0, { added: full.added.length, dropped: full.dropped });
+  const stDefault = repo2.emptyState();
+  const def = ingF(evs, stDefault, { autoAdd: true }, { dry: true, add: true });
+  check('v0.7.8 不传 maxNewRows → 仍是 v1 旧口径（5 < 30，全开；既有调用零行为变化）',
+    def.added.length === 5 && def.dropped === 0, { added: def.added.length, dropped: def.dropped });
+}
+
 (async () => {
   // ① 同步/异步两条驱动必须产出**完全相同**的事件与扫描统计（同一生成器、两个驱动，永不漂移）
   const stSync = repo2.emptyState();

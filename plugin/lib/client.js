@@ -25,6 +25,21 @@
 //   工作区未知 / 未注册 / 同名歧义 → 回退当前工作区，并在 toast 里说明原因；
 //   面板页脚常显三态开关「自动｜🐳 全局｜📁 项目」（选择记 localStorage）供手动覆盖；
 //   落点与依据随每次 toast 报出，并写进新会话的开局消息（本会话工作区：… 路由依据：…）。
+// v0.7.8（2026-09）：待审箱页两个新入口（需求：开关 + 一键历史深掘）——
+//   ① 页脚「自动收集」开关（复用 .wh-seg 样式，两态：自动入箱｜仅暂存）：
+//        状态**取自服务端** GET /whale/settings（不是 localStorage —— 它改的是真实采集行为）；
+//        点击 POST /whale/settings {autoAdd:bool}，只写 settings.json（不碰 AGENTS.md），立即生效。
+//   ② 页头 ⛏「历史深掘」：POST /whale/sweep -> {added,bumped,suppressed,echo,pending,scan,...}
+//        宿主 = 阶段① --add（把已有暂存先入箱，防重建清空丢件）+ 阶段② --rebuild --add
+//        （清空水位线/指纹/聚簇后从头梳理全部历史，直接入箱；已处置归档的不复活）；
+//        运行中每 1.2s 轮询 GET /whale/live 取 scanJob 进度写到页脚状态行；结束后
+//        另开一个会话（落点＝鲸鱼全局）让模型做「历史错误总结 / 同族合并建议 / 入库草案」，
+//        开局消息由 sweepMessage() 生成（含扫描统计 + 待审清单 + 只读约束）。
+//   GET  /whale/settings         -> {ok, autoAdd, autoCollect, liveCapture, scanMode}
+//   POST /whale/settings         -> {ok, changed, autoAdd, pending, deferred}
+//   POST /whale/sweep            -> {ok, dry, flush, added, bumped, ...}；{dry:true} = 只读预演
+//   面板记忆（pin）：用户主动打开过面板后，即使待审为 0 也保留侧边入口 —— 否则「待审=0 且要切换
+//     开关」时入口会消失，开关就够不着了。记在 localStorage['whale.panelPin']。
 window.__ModuleLoader__.load({
 	id: "@deepseek-ai/dsh-whale-notebook",
 	factory: (require) => {
@@ -64,6 +79,7 @@ window.__ModuleLoader__.load({
 			".wh-head-title{flex:1;min-width:0;font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
 			".wh-icn{flex:none;width:20px;height:20px;padding:0;border:none;border-radius:6px;background:transparent;color:inherit;cursor:pointer;font-size:12px;line-height:20px;opacity:.5;text-align:center}",
 			".wh-icn:hover{opacity:1;background:rgba(128,128,128,.16)}",
+			".wh-icn:disabled{opacity:.3;cursor:default;background:transparent}",
 			".wh-list{flex:1;overflow-y:auto;min-height:0;padding:5px 6px 7px}",
 			".wh-list::-webkit-scrollbar{width:6px}",
 			".wh-list::-webkit-scrollbar-thumb{background:rgba(128,128,128,.35);border-radius:3px}",
@@ -151,6 +167,47 @@ window.__ModuleLoader__.load({
 			}).catch(function (err) {
 				console.warn("[whale-panel] 增量扫描失败（仅刷新列表）:", err && err.message ? err.message : err);
 				return null;
+			});
+		}
+		// v0.7.8：运行状态（深掘进度用；失败返回 null，调用方保持上一行文字）
+		function apiLive() {
+			return fetch("/whale/live", { headers: { accept: "application/json" } })
+				.then(function (r) { return r.json().catch(function () { return null; }); })
+				.then(function (j) { return (j && j.ok === true) ? j : null; })
+				.catch(function () { return null; });
+		}
+		// v0.7.8：读「自动收集」当前值（服务端为准）；损坏/失败返回 null（面板显示未知态，不假装）
+		function apiSettings() {
+			return fetch("/whale/settings", { headers: { accept: "application/json" } })
+				.then(function (r) { return r.json().catch(function () { return null; }); })
+				.then(function (j) { return (j && j.ok === true) ? j : null; })
+				.catch(function () { return null; });
+		}
+		// v0.7.8：切换自动收集（POST /whale/settings）；失败抛错（调用方 toast 原文）
+		function apiSetAutoAdd(v) {
+			return fetch("/whale/settings", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ autoAdd: !!v })
+			}).then(function (r) {
+				return r.json().catch(function () { return null; }).then(function (j) {
+					if (!r.ok || !j || j.ok !== true) throw new Error(j && j.error ? j.error : "HTTP " + r.status);
+					return j;
+				});
+			});
+		}
+		// v0.7.8：历史深掘（POST /whale/sweep）。dry=true 只读预演（不写盘）——面板不用，
+		//   留给 curl 验收与自测；失败抛错（调用方 toast 原文，如「写入锁不可用」「扫描进行中」）。
+		function apiSweep(dry) {
+			return fetch("/whale/sweep", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(dry ? { dry: true } : {})
+			}).then(function (r) {
+				return r.json().catch(function () { return null; }).then(function (j) {
+					if (!r.ok || !j || j.ok !== true) throw new Error(j && j.error ? j.error : "HTTP " + r.status);
+					return j;
+				});
 			});
 		}
 		// v0.3：候选详情 sidecar；失败/旧候选一律返回 null（调用方回退无详情模板）
@@ -253,6 +310,68 @@ window.__ModuleLoader__.load({
 				}
 			} catch (e) { /* fallthrough */ }
 			return null;
+		}
+		//#endregion
+		//#region panel actions（v0.7.8：自动收集开关 + 历史深掘）
+		// 「自动收集」＝ settings.autoAdd：true=新发现直接进待审箱；false=只暂存（说「小本本复盘」才入箱）。
+		// 两态展示（而不是一个滑动开关）：两种模式各自的名字比"开/关"更不容易误读。
+		var SETTINGS_MODES = [
+			{ key: "auto", text: "自动入箱", value: true, title: "自动收集：开启 —— 扫描与实时采集发现的问题直接写入待审箱（待审箱会自动出现新候选）；改的是 settings.json，立即生效、无需重启。" },
+			{ key: "pull", text: "仅暂存", value: false, title: "自动收集：关闭 —— 只记进暂存区（state.deferred），待审箱不会自动增长；说「小本本复盘」或面板 ⟳ 后由 --add 冲入待审箱。" }
+		];
+		var PIN_KEY = "whale.panelPin";     // 面板记忆：主动打开过面板 → 待审为 0 也保留侧边入口
+		var SWEEP_POLL_MS = 1200;           // 深掘期间轮询 /whale/live 的间隔
+		var SWEEP_POLL_MAX = 150;           // 轮询次数上限（≈3 分钟），超时停轮询但请求照常等
+		function readPin() {
+			try { return window.localStorage.getItem(PIN_KEY) === "1"; } catch (e) { return false; }
+		}
+		function writePin(v) {
+			try { window.localStorage.setItem(PIN_KEY, v ? "1" : "0"); } catch (e) { /* 隐私模式/无 storage：忽略 */ }
+		}
+		// 深掘完成后的页脚一行（人话 + 关键数字）
+		function sweepSummaryText(j) {
+			if (!j) return "";
+			var mb = j.scan && j.scan.readBytes ? (j.scan.readBytes / 1048576).toFixed(2) + "MB" : "";
+			var L = ["新开 " + (j.added || 0), "累加 " + (j.bumped || 0)];
+			if (j.suppressed) L.push("压掉 " + j.suppressed);
+			if (j.echo) L.push("回声过滤 " + j.echo + " 组");
+			if (j.dropped) L.push("⚠ 超上限丢弃 " + j.dropped);
+			if (mb) L.push(mb);
+			L.push(((j.ms || 0) / 1000).toFixed(1) + "s");
+			return "⛏ " + L.join("｜");
+		}
+		// 深掘开局消息（自动开启的新会话里那份"历史错误总结"任务书）。
+		// 设计：数字与清单全部来自**宿主已经落盘的事实**（不靠模型回忆）；写入约束写在最后（最重要）。
+		function sweepMessage(j, rows, route) {
+			if (!j) return null;
+			var s = j.scan || {};
+			var L = [];
+			L.push("【小本本·历史深掘】面板刚触发了一次「全量重扫历史」，结果**已由宿主直接写入待审箱**（不需要你再跑扫描）：");
+			L.push("- 扫描：" + (s.files || 0) + " 个会话日志 / " + ((s.readBytes || 0) / 1048576).toFixed(2) + "MB / " + ((j.ms || 0) / 1000).toFixed(1) + "s（重建模式：水位线/指纹/聚簇清空后从头梳理全部历史）");
+			L.push("- 结果：新开候选 " + (j.added || 0) + " 条｜累加已有候选 " + (j.bumped || 0) + " 条｜已处置签名压掉 " + (j.suppressed || 0) + " 条（归档/入库过的不复活）｜自引用回声过滤 " + (j.echo || 0) + " 组"
+				+ (j.flush && j.flush.added ? "｜另有暂存冲入 " + j.flush.added + " 条" : ""));
+			if (j.dropped) L.push("- ⚠ 有 " + j.dropped + " 组因单轮上限未入箱（已记指纹，不会再被扫到）——请在总结里明确告诉用户这一条。");
+			L.push("- 待审箱现有 " + (j.pending || 0) + " 条候选。");
+			if (route && route.label) L.push("- 本会话工作区：" + route.label + "（路由依据：" + route.reason + "）");
+			var list = (rows || []).slice(0, 20);
+			if (list.length) {
+				L.push("");
+				L.push("候选清单（最多列 20 条；现象列已打码）：");
+				for (var i = 0; i < list.length; i++) {
+					var r = list[i];
+					L.push("  " + r.id + "｜" + r.cat + "｜×" + r.n + "｜" + (r.ws || "?") + "｜" + String(r.text || "").slice(0, 100));
+				}
+				if ((rows || []).length > list.length) L.push("  …另有 " + ((rows || []).length - list.length) + " 条（面板 ⟳ 可看全量）");
+			}
+			L.push("");
+			L.push("请按技能 whale-notebook 的复盘流程完成这次「历史错误总结」：");
+			L.push("① 读 `inbox.md` 全文；对需要更多证据的候选读对应的 `details/C###.md`（按需，别全读）；与 `entries/`、`INDEX.md` 比对做去重。");
+			L.push("② 输出总览（类别｜次数｜受影响工作区｜首次~最近）与编号清单，每条两行：`C0xx｜现象：<一行>` / `拟对策：<一行祈使句>`。");
+			L.push("③ 同族合并建议：指出哪些候选是同一根因、建议合并成一条经验（occurrences 取总和），哪些必须拆分——依据用「族×N」与 sidecar 里的「同族并入」段，不要凭感觉。");
+			L.push("④ 每条给出拟 scope 建议（global / project + projects 列表）与理由。");
+			L.push("⑤ **只读分析**：不要写 entries/、不要改 INDEX.md 与 AGENTS.md、不要改 inbox.md；等用户逐条确认后再按入库流程落盘。");
+			L.push("固定约束：不要重复运行 `--rebuild`（本轮已完成）；如需补扫只跑 `mine.cjs --check`（增量、会跳过未更新的日志）。");
+			return L.join("\n");
 		}
 		//#endregion
 		//#region text builders（候选信息全部来自 inbox 已打码行 + 本地 detail sidecar）
@@ -449,6 +568,12 @@ window.__ModuleLoader__.load({
 			var discussMode = readRouteMode(); // v0.7.3：讨论落点 auto|global|project（localStorage 记忆）
 			var globalWsId = null;             // v0.7.3：「鲸鱼全局」workspaceId 缓存（惰性注册后记住）
 			var globalWsPromise = null;        // 并发合并：连点多条候选只准备一次
+			var autoAddMode = null;            // v0.7.8：自动收集当前值（null＝还没读到/读失败，面板显示未知态）
+			var settingsErr = null;            // v0.7.8：settings 读取失败原因（面板在开关上给出提示，不假装成功）
+			var sweepBusy = false;             // v0.7.8：深掘进行中（按钮置灰 + 服务端 409 双保险）
+			var sweepPoll = null;              // v0.7.8：深掘进度轮询 interval
+			var sweepPollTicks = 0;
+			var noteTimer = null;              // v0.7.8：状态行临时文案的回收定时器
 
 			var box = el("div", "wh-box");
 			// 入口 tab A：待审（有待审核候选才显示；红徽 = 待审数）
@@ -479,12 +604,16 @@ window.__ModuleLoader__.load({
 			// v0.4.1：页头快捷钮「进入 A2 已解决页」——贴刷新 ⟳ 左边，免去收起再点侧边 ✅ 入口
 			var btnSolved = el("button", "wh-icn", "✅");
 			btnSolved.title = "已解决墙（A2）：查看已入库条目";
+			// v0.7.8：页头 ⛏「历史深掘」——全量重扫全部历史 → 抓所有历史错误 → 直接入待审箱 + 开会话做总结
+			var btnSweep = el("button", "wh-icn", "⛏");
+			btnSweep.title = "历史深掘：全量重扫全部会话历史 → 抓取所有历史错误 → 直接写入待审箱（已处置的不复活），并自动开一个总结会话（唯一花模型 token 的一步）";
 			var btnRefresh = el("button", "wh-icn", "⟳");
 			btnRefresh.title = "刷新";
 			var btnClose = el("button", "wh-icn", "✕");
 			btnClose.title = "收起 (Esc)";
 			head.appendChild(headTitle);
 			head.appendChild(btnSolved);
+			head.appendChild(btnSweep);
 			head.appendChild(btnRefresh);
 			head.appendChild(btnClose);
 			card.appendChild(head);
@@ -507,7 +636,25 @@ window.__ModuleLoader__.load({
 			}
 			routeBar.appendChild(seg);
 			foot.appendChild(routeBar);
-			foot.appendChild(el("div", "wh-foot-note", "候选来自 inbox.md｜删除移入 archive"));
+			// v0.7.8：自动收集开关（两态；状态以服务端 GET /whale/settings 为准）
+			var collectBar = el("div", "wh-route");
+			collectBar.appendChild(el("span", "wh-route-label", "自动收集"));
+			var segC = el("div", "wh-seg");
+			var collectBtns = [];
+			for (var ci = 0; ci < SETTINGS_MODES.length; ci++) {
+				(function (m) {
+					var b = el("button", "wh-seg-btn", m.text);
+					b.title = m.title;
+					b.addEventListener("click", function (ev) { ev.stopPropagation(); setAutoAdd(m.value); });
+					collectBtns.push({ key: m.key, el: b });
+					segC.appendChild(b);
+				})(SETTINGS_MODES[ci]);
+			}
+			collectBar.appendChild(segC);
+			foot.appendChild(collectBar);
+			// v0.7.8：状态行（默认是说明；深掘期间显示进度，完成后留 20s 结果再回默认）
+			var noteEl = el("div", "wh-foot-note", "候选来自 inbox.md｜删除移入 archive");
+			foot.appendChild(noteEl);
 			card.appendChild(foot);
 			box.appendChild(card);
 			// 卡 B：已解决墙（v0.4；轻口径：入库=已处理；与文档墙 INDEX.md 同源）
@@ -569,6 +716,153 @@ window.__ModuleLoader__.load({
 			}
 			paintRoute();
 
+			// ---- v0.7.8：状态行（页脚第三行）----
+			var NOTE_DEFAULT = "候选来自 inbox.md｜⛏ = 全量重扫历史入箱";
+			function setNote(text, restoreMs) {
+				if (noteTimer) { clearTimeout(noteTimer); noteTimer = null; }
+				noteEl.textContent = text || NOTE_DEFAULT;
+				if (restoreMs) {
+					noteTimer = setTimeout(function () {
+						noteTimer = null;
+						noteEl.textContent = NOTE_DEFAULT;
+					}, restoreMs);
+				}
+			}
+
+			// ---- v0.7.8：自动收集开关（settings.autoAdd；状态取自服务端）----
+			function paintAutoAdd() {
+				for (var i = 0; i < collectBtns.length; i++) {
+					if (autoAddMode === null) collectBtns[i].el.classList.remove("wh-seg-on");
+					else if (collectBtns[i].key === (autoAddMode ? "auto" : "pull")) collectBtns[i].el.classList.add("wh-seg-on");
+					else collectBtns[i].el.classList.remove("wh-seg-on");
+				}
+				collectBar.title = autoAddMode === null
+					? ("自动收集：读取中" + (settingsErr ? "（" + settingsErr + "）" : ""))
+					: (autoAddMode ? "自动收集：已开启（新发现直接写入待审箱）" : "自动收集：已关闭（新发现只暂存，说「小本本复盘」才入箱）");
+			}
+			function refreshSettings(silent) {
+				return apiSettings().then(function (j) {
+					if (!j) {
+						settingsErr = "端点不可用或 settings.json 读取失败";
+						paintAutoAdd();
+						if (!silent) toast("读取自动收集状态失败：宿主端点不可用或 settings.json 损坏");
+						return null;
+					}
+					settingsErr = null;
+					autoAddMode = j.autoAdd === true;
+					paintAutoAdd();
+					return j;
+				});
+			}
+			function setAutoAdd(v) {
+				if (autoAddMode !== null && autoAddMode === !!v) {
+					toast(v ? "自动收集已是「自动入箱」" : "自动收集已是「仅暂存」");
+					return;
+				}
+				apiSetAutoAdd(v).then(function (j) {
+					autoAddMode = j.autoAdd === true;
+					paintAutoAdd();
+					if (j.changed === false) {
+						toast("自动收集已是该模式（settings.json 未变）");
+					} else {
+						toast(v
+							? "自动收集已开启：新发现直接进待审箱（立即生效，无需重启）"
+							: "自动收集已关闭：新发现只暂存，说「小本本复盘」或点 ⟳ 入箱");
+					}
+					return refresh(true);
+				}, function (err) {
+					toast("切换失败：" + (err && err.message ? err.message : String(err)));
+					refreshSettings(true);
+				});
+			}
+
+			// ---- v0.7.8：历史深掘（⛏）----
+			function stopSweepPoll() {
+				if (sweepPoll) { clearInterval(sweepPoll); sweepPoll = null; }
+				sweepPollTicks = 0;
+			}
+			function startSweepPoll() {
+				stopSweepPoll();
+				sweepPoll = setInterval(function () {
+					sweepPollTicks++;
+					if (sweepPollTicks > SWEEP_POLL_MAX) { stopSweepPoll(); return; }
+					if (document.hidden) return; // 页面不可见时不打扰宿主
+					apiLive().then(function (j) {
+						if (!sweepBusy) return;
+						var sj = j && j.scanJob;
+						if (sj && sj.running) {
+							setNote("⛏ 深掘中（" + (sj.phase === "rebuild" ? "全量重扫" : "冲入暂存") + "）：已扫 "
+								+ (sj.scanned || 0) + "/" + (sj.files || 0) + " 个日志｜"
+								+ ((sj.readBytes || 0) / 1048576).toFixed(1) + "MB…");
+						}
+					});
+				}, SWEEP_POLL_MS);
+			}
+			function doSweep() {
+				if (sweepBusy) return toast("深掘已在运行中…");
+				if (!sessions) toast("提示：当前环境无会话服务，深掘仍会执行，但不会自动开总结会话");
+				sweepBusy = true;
+				btnSweep.disabled = true;
+				btnSweep.textContent = "⛏…";
+				setNote("⛏ 深掘中（全量重扫历史）：准备中…");
+				startSweepPoll();
+				apiSweep(false).then(function (j) {
+					stopSweepPoll();
+					var sum = sweepSummaryText(j);
+					setNote(sum, 20000);
+					toast(sum + "（待审箱现有 " + j.pending + " 条）");
+					return refresh(true).then(function () { return j; });
+				}, function (err) {
+					stopSweepPoll();
+					setNote("⛏ 深掘失败：" + (err && err.message ? err.message : String(err)), 20000);
+					toast("深掘失败：" + (err && err.message ? err.message : String(err)));
+					return null;
+				}).then(function (j) {
+					sweepBusy = false;
+					btnSweep.disabled = false;
+					btnSweep.textContent = "⛏";
+					if (!j) return;
+					openSweepSession(j);
+				});
+			}
+			// 深掘完成后：开一个会话做「历史错误总结」。落点固定「鲸鱼全局」（历史深掘天生跨全部工作区，
+			// 与既有「跨项目候选 → 鲸鱼全局」同源）；工作区不可用 → 回退当前工作区并在 toast 说明。
+			// 无新发现且待审为空 → 不开（不白烧 token）。
+			function openSweepSession(j) {
+				var hasWork = (j.added || 0) + (j.bumped || 0) > 0 || (j.pending || 0) > 0;
+				if (!hasWork) { toast("历史已是最新：无新发现、待审箱为空（未开总结会话）"); return; }
+				if (!sessions) return;
+				ensureGlobalWorkspace().then(function (wsId) {
+					return { workspaceId: wsId, label: GLOBAL_WS.title, reason: "历史深掘跨全部工作区" };
+				}, function () {
+					var curWs = workspaceIdOf(sessions, workspaces, currentSessionId(sessions));
+					return { workspaceId: curWs, label: (curWs !== undefined && curWs !== null ? wsLabel(wsItems(), curWs) : null) || "当前工作区", reason: "鲸鱼全局工作区不可用 → 回退当前工作区" };
+				}).then(function (t) {
+					var msg = sweepMessage(j, rows, t);
+					if (!msg) return null;
+					var opts = (t.workspaceId !== undefined && t.workspaceId !== null) ? { workspaceId: t.workspaceId } : {};
+					return sessions.create(opts).then(function (newId) {
+						return waitBinding(sessions, newId, 5000).then(function (bind) {
+							if (bind) {
+								try {
+									return bind.session.prompt([{ type: "text", text: msg }], "queue").then(function () { return newId; }, function () { return newId; });
+								} catch (e) { return newId; }
+							}
+							return newId;
+						});
+					}, function (err) {
+						toast("总结会话新建失败：" + (err && err.message ? err.message : String(err)) + "（深掘结果已在待审箱）");
+						return null;
+					}).then(function (newId) {
+						if (!newId) return;
+						sessions.open(newId);
+						toast("已开总结会话 → " + t.label + "（" + t.reason + "）");
+					});
+				}, function (err) {
+					toast("开会话失败：" + (err && err.message ? err.message : String(err)) + "（深掘结果已在待审箱）");
+				});
+			}
+
 			function renderRows() {
 				list.textContent = "";
 				if (rows.length === 0) {
@@ -615,8 +909,12 @@ window.__ModuleLoader__.load({
 			}
 
 			// v0.4：已解决墙状态机（无待审且无已解决 → 整面板隐藏，保持「不打扰」）
+			// v0.7.8：新增「面板记忆」pin —— 用户主动打开过面板后，即使待审=0 也保留侧边入口。
+			//   为什么必须加：页脚「自动收集」开关与页头 ⛏ 都在这张卡上，而"待审=0 且要切换的模式正是
+			//   自动入箱"恰好会让整块面板消失（正是最需要开关的时候）。pin 只由用户的主动点击置位，
+			//   所以对"从没开过面板"的人依旧是原来那套不打扰行为。
 			function applyState() {
-				var showA = pending > 0 || deferred > 0;   // v0.6：仅有暂存发现时也保留入口（面板不躲起来）
+				var showA = pending > 0 || deferred > 0 || readPin();   // v0.6：有暂存也保留入口；v0.7.8：+ pin
 				var showB = !!(solved && solved.stats && solved.stats.active > 0);
 				if (!showA && !showB) {
 					box.style.display = "none";
@@ -628,6 +926,8 @@ window.__ModuleLoader__.load({
 				tabA.style.display = showA ? "" : "none";
 				if (showA) {
 					var badgeN = pending > 0 ? pending : deferred;
+					// v0.7.8：pin 生效且计数为 0 时不要挂一个红色「0」徽标（有 pin 没内容也是正常态）
+					badge.style.display = badgeN > 0 ? "" : "none";
 					badge.textContent = badgeN > 99 ? "99+" : String(badgeN);
 					headTitle.textContent = "🐳 待审箱 · " + pending + (deferred > 0 ? "（暂存 " + deferred + "）" : "");
 				}
@@ -643,6 +943,11 @@ window.__ModuleLoader__.load({
 			}
 
 			function setMode(mode) {
+				if (mode !== null) {
+					// v0.7.8：用户主动展开面板 → 记住这个入口（pin），并顺手对齐一次开关状态
+					if (!readPin()) writePin(true);
+					refreshSettings(true);
+				}
 				if (open === mode) {
 					open = null;
 					box.classList.remove("wh-open-inbox", "wh-open-solved");
@@ -979,6 +1284,8 @@ window.__ModuleLoader__.load({
 				});
 			});
 			btnRefreshB.addEventListener("click", function () { renderSolved(); refreshSolved(false); });
+			// v0.7.8：⛏ 历史深掘（全量重扫历史 → 入待审箱 + 开总结会话）
+			btnSweep.addEventListener("click", function () { doSweep(); });
 			function onDocDown(ev) {
 				if (open && !box.contains(ev.target)) setMode(null);
 			}
@@ -999,6 +1306,8 @@ window.__ModuleLoader__.load({
 				return function () {
 					if (timer) clearInterval(timer);
 					stopRiskWatch();
+					stopSweepPoll();                      // v0.7.8：深掘进度轮询
+					if (noteTimer) { clearTimeout(noteTimer); noteTimer = null; }
 					document.removeEventListener("pointerdown", onDocDown, true);
 					window.removeEventListener("keydown", onKey);
 					window.removeEventListener("focus", onFocus);
@@ -1014,12 +1323,15 @@ window.__ModuleLoader__.load({
 			}, "whale-panel: lifecycle");
 
 			applyState();
+			paintAutoAdd();      // v0.7.8：先画「未知态」，再等 refreshSettings 落到真实值
 			refresh(true);
 			refreshSolved(true);
+			refreshSettings(true);
 		}
 		//#endregion
 		exports.apply = apply;
 		// v0.7.3：把讨论路由的纯函数暴露给自测（bundle 不能 require，这是唯一可测缝隙）
+		// v0.7.8：并入面板两个新入口的纯函数（开关两态表 / 深掘消息与结果行 / pin 读写）
 		exports.__internals = {
 			GLOBAL_WS: GLOBAL_WS,
 			ROUTE_MODES: ROUTE_MODES,
@@ -1030,7 +1342,15 @@ window.__ModuleLoader__.load({
 			wsLabel: wsLabel,
 			planDiscuss: planDiscuss,
 			readRouteMode: readRouteMode,
-			writeRouteMode: writeRouteMode
+			writeRouteMode: writeRouteMode,
+			SETTINGS_MODES: SETTINGS_MODES,
+			PIN_KEY: PIN_KEY,
+			SWEEP_POLL_MS: SWEEP_POLL_MS,
+			SWEEP_POLL_MAX: SWEEP_POLL_MAX,
+			readPin: readPin,
+			writePin: writePin,
+			sweepSummaryText: sweepSummaryText,
+			sweepMessage: sweepMessage
 		};
 		return module.exports;
 	}

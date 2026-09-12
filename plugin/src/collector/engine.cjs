@@ -825,7 +825,11 @@ function* runScanGen(mode, o, ctl) {
   const state = repo.readState();
   // v0.6 --add：只把暂存摘要冲入待审箱，不重新扫描（O(暂存数)，与历史大小无关）
   if (mode === '--add') {
-    const out = flushDeferred(state, settings, { dry: o.dry, resolved: loadResolvedIndex() });
+    const out = flushDeferred(state, settings, {
+      dry: o.dry,
+      resolved: loadResolvedIndex(),
+      maxNewRows: Number.isFinite(o.maxNewRows) ? o.maxNewRows : undefined, // v0.7.8：深掘阶段①用大上限
+    });
     if (!o.dry) repo.writeState(state);
     const bits = [`入箱 ${out.added.length} 条(${out.added.map((r) => r.cat).join(',') || '无'})`];
     if (out.bumped.length) {
@@ -913,7 +917,14 @@ function* runScanTail(mode, o, ctxIn) {
 
   // 默认 --check / --rebuild：新事件按聚簇合并/复发后入箱
   // v0.6：autoAdd=false 且未显式 --add 时改为暂存（不写 inbox）
-  const ing = ingestFresh(scan.events, state, settings, { dry: o.dry === true, add: o.add === true, resolved: resolvedIndex });
+  // v0.7.8：单轮开行上限可由 opts.maxNewRows 指定（面板「历史深掘」= 全量重建，用大上限防
+  //   "超过 30 条就被丢弃且已记指纹、以后再也抓不到"；缺省仍 30，既有调用零行为变化）。
+  const ing = ingestFresh(scan.events, state, settings, {
+    dry: o.dry === true,
+    add: o.add === true,
+    resolved: resolvedIndex,
+    maxNewRows: Number.isFinite(o.maxNewRows) ? o.maxNewRows : undefined,
+  });
   state.lastScan = Date.now();
   persistScanStats(state, s, mode); // v0.7.5：扫描健康度落 state（/whale/live 可视化）
   if (!o.dry) repo.writeState(state);

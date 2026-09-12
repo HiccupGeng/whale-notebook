@@ -62,6 +62,37 @@ function readJsonStrict(file, def) {
 
 // ---- settings ----
 function readSettings() { return readJson(P.settings, {}); }
+// v0.7.8：settings 的**严格读**（面板「自动收集」开关的写路径专用）。
+//   为什么不能沿用 readSettings：它解析失败时静默返回 {} —— 面板一旦"读-改-写"就会把用户
+//   其它开关（scanMode/liveCapture/maxDeferred…）整批吃掉。这里区分两种情形：
+//     · 文件不存在（ENOENT）= 首次使用 → 返回 {}（与默认值等价）
+//     · 内容损坏/不是对象   = 报错，且**不改名、不覆盖**（settings 只几百字节，改名备份只会让人更慌，
+//       与 state 的 readJsonStrict 刻意不同）
+function readSettingsStrict() {
+  let raw;
+  try { raw = fs.readFileSync(P.settings, 'utf8'); }
+  catch (err) {
+    if (err && err.code === 'ENOENT') return {};
+    throw new Error(`settings.json 读取失败（${(err && err.code) || (err && err.message) || 'unknown'}）；未做任何写入`);
+  }
+  let obj;
+  try { obj = JSON.parse(raw); }
+  catch (err) { throw new Error(`settings.json 内容损坏（${err.message}）；未做任何写入，请先修好再试`); }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    throw new Error('settings.json 顶层不是对象（应为 {...}）；未做任何写入，请先修好再试');
+  }
+  return obj;
+}
+// 原子替换（本进程独有 tmp + rename，见审计 N5）。
+// v0.7.8：settings.json **按人读的样式写回**（2 空格缩进 + 结尾换行），不复用 state.json 的 1 空格机器样式。
+//   实测动因：面板第一次切换会把用户手写的 2 空格文件重排成 1 空格 —— 键值一个不丢，但"点一下开关、
+//   配置文件排版就变了"是没必要的副作用（这是用户会手动编辑的配置文件）。内容只改被切换的那个键：
+//   其余键（含用户自己写的 `_comment` 说明）逐键原样保留。
+function writeSettings(obj) {
+  const tmp = tmpNameFor(P.settings);
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, P.settings);
+}
 
 // ---- state ----
 // v0.5 结构（旧 state.json 自动补齐，零迁移）：
@@ -539,7 +570,7 @@ function buildIndexMd(entries) {
 module.exports = {
   HOME, NB_DIR, P, STATE_VERSION,
   readJson, writeJson, readJsonStrict, statOf, tmpNameFor, mergeStates, stateDiag,
-  readSettings, readState, emptyState, normalizeState, writeState,
+  readSettings, readSettingsStrict, writeSettings, readState, emptyState, normalizeState, writeState,
   lockPath, acquireLock, acquireLockSync, unlockState,
   // v0.7.7：维护窗口标记（rebuild 期间实时采集让路但不丢事件）
   maintenancePath, readMaintenance, writeMaintenance, clearMaintenance, MAINTENANCE_MAX_MS,
