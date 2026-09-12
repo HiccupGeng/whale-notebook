@@ -387,12 +387,12 @@ EXIT=1
 
 | 计划项 | 落地情况 | 证据 |
 |---|---|---|
-| 3.2 `/whale/scan` 异步化 | ✅ **不做 202+jobId**，改为把 `scanHistory`/`runScanInner` 做成**生成器 + 双驱动**（同步驱动给 CLI、异步驱动给宿主），每 8 文件或每 4MB `await setImmediate`。HTTP 契约与返回体**完全不变量 → 面板零改动**；另加异步取锁（等锁也不阻塞）、`/whale/live.scanJob` 可观测、卸载取消位（保证释放写锁） | `engine.selftest` +7：「异步与同步结果一致（事件逐字节 + 统计口径）」「让出点确实被触发（onProgress）」「取消：明确失败」「取消后不残留写锁与维护窗口」 |
+| 3.2 `/whale/scan` 异步化 | ✅ **不做 202+jobId**，改为把 `scanHistory`/`runScanInner` 做成**生成器 + 双驱动**（同步驱动给 CLI、异步驱动给宿主）。HTTP 契约与返回体**完全不变量 → 面板零改动**；另加异步取锁（等锁也不阻塞）、`/whale/live.scanJob` 可观测、卸载取消位（保证释放写锁）。**让出粒度经两轮实测修正**：第一版"每 8 文件/每 4MB"交付后实测**不合格**（扫描期间 `/whale/live` 往返最高 **3857ms** —— 单个 3.4MB 大日志在一次 `collectEventsFrom` 里整段解完，宿主被独占 ~1.6s）→ 第二轮加 `decoder` 窗口读（`maxBytes` + `more`/`truncated`）与 `engine.readFileWindows`，大日志按 **256KB 一片**续读（会话上下文逐片前传）。**复测：52.1MB 全量扫描、6.0s、最大事件循环卡顿 69ms、无一次超 100ms**，`dupFingerprints=241` 说明全部事件被指纹去重、未产生新候选 | `engine.selftest` +9：「异步与同步结果一致（事件逐字节 + 统计口径）」「让出点确实被触发」「**1KB 窗口切片与整读产出完全相同的事件与水位线**」（120 帧大日志把小窗口路径跑满）「小窗口确实切了多片」「取消：明确失败」「取消后不残留写锁与维护窗口」 |
 | 3.3 `--rebuild` 维护窗口 | ✅ 原设计用 `state.maintenance` 字段；实施改为**独立标记文件** `.maintenance.json`（读它比解析整个 state 便宜；不必给 state 加字段 → 也就不必改 CAS 合并语义）+ `expiresAt` TTL 兜底 + `finally` 无条件关窗。live 在**取锁前**先读它，命中就让路：事件留在缓冲、1s 后重试、`heldByMaintenance` 计数，**一条不丢** | `engine.selftest`「窗口开启（让出点可见）」+「结束后关闭」；`e2e.selftest`「rebuild 后不残留标记」；`live.selftest`「flush 让路不写盘」+「窗口关闭后缓冲补上」；`repo.selftest` +6（TTL 自愈 / 夹上限 / 原子写 / 幂等清除） |
 | 3.4 L1 注册模式迁移 | ✅ 已执行 `install --apply --agents-mode zones`：**AGENTS.md 字节未变**（sha256 前后一致），`uninstall remove` 干跑现显示「AGENTS.md 标记区(zones; 区外内容保留)」 | 迁移前 `check` exit 1（2 条漂移）→ 迁移后 **exit 0** |
 | 3.4 L2 判定改造 | ✅ **三级分级**：exit 1 只给"缺失 / 结构损坏（截断、非法 UTF-8、frontmatter 丢失、缺 `## 工作流`、小节过少等）/ 孤儿 / 清单待迁移"；「内容变了但结构完好」= **待登记**（信息级，exit 0）；`remove` 仍用 diffs 要求 `--yes`（删除前确认）；zones 模式**只对账两个标记区**（区内容基线 `zoneHash`）——你在区外写的东西改了/加了/删了都**不算漂移** | `lifecycle.selftest` 104→**120**：区外改动零待登记、区内改动＝待登记且 exit 0、结构损坏 exit 1、`remove` 仍要 `--yes`、adopt 不改文件内容 |
 | 3.4 L3 流程闭环 | ✅ 新增 `check --adopt`（只更新清单基线、**不碰任何文件内容**；结构损坏的条目拒绝登记）+ 技能 §7 增补"入库改写自动段 / 更新技能后跑一次 adopt"；lifecycle 工具 0.1.1 → **0.2.0** | 实测：改完技能 → `check` 报 1 项待登记（exit 0）→ `check --adopt` → 重新登记 agents（含区基线）与 skill → `check` 恢复「通过」 |
 
-**测试口径（v0.7.7）**：10 套件 **442 断言全绿**（`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **535**。
+**测试口径（v0.7.7）**：10 套件 **444 断言全绿**（`repo` 28→34、`engine` 26→35、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **537**。
 **生效差异**：漂移分级与 `check --adopt` 属**命令侧、立即生效**；异步扫描 / `scanJob` / `maintenance` 属宿主半边，需**先 `deploy-web --apply` 再重启 `dsh web`**（本次已 `--apply`，`--check` exit 0）。
 **五项全部收口**：① 回声自我放大（v0.7.6）② 扫描异步化（v0.7.7）③ rebuild 维护窗口（v0.7.7）④ 漂移守卫（v0.7.7）⑤ 双计（实测不成立，已用计数器 + 不变量断言钉住）。审计清单里其余项（N7 已随之解决、N10–N17、N27–N29 等）仍按原优先级保留。

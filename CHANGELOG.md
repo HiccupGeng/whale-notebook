@@ -11,9 +11,11 @@
 
 **问题**：`POST /whale/scan` 的处理器里 `engine.runScan('--check')` 是**同步**调用，`scanHistory` 全程同步 IO（`statSync`/`readFileSync`/`zstdDecompressSync`）。实测增量扫描 23–53ms（无感），但水位线失效或全量时 **44.43MB ≈ 5084ms**，这段时间宿主 Node 事件循环被独占——面板其它端点、实时采集去抖器、GUI 自身请求全部排队。
 
-**修法**：把 `scanHistory` 与 `runScanInner` 的主体改为**生成器**，配两个驱动：同步驱动（CLI，`driveSync` 忽略让出请求 → 退出码与输出口径**零变化**）与异步驱动（宿主 `runScanAsync`，在让出点 `await setImmediate`）。让出条件 = 每 8 个文件或每读取 ≥4MB；循环体只有一份，两条路永不漂移。宿主侧另加：异步取写锁（`await repo.acquireLock`，等锁也不阻塞）、`/whale/live` 新增 `scanJob`（在飞那一轮的 files/scanned/readBytes/ms）、插件卸载置取消位（扫描在下一个让出点退出并**一定**释放锁）。HTTP 契约与返回体不变，**面板零改动**。
+**修法**：把 `scanHistory` 与 `runScanInner` 的主体改为**生成器**，配两个驱动：同步驱动（CLI，`driveSync` 忽略让出请求 → 退出码与输出口径**零变化**）与异步驱动（宿主 `runScanAsync`，在让出点 `await setImmediate`）。循环体只有一份，两条路永不漂移。宿主侧另加：异步取写锁（`await repo.acquireLock`，等锁也不阻塞）、`/whale/live` 新增 `scanJob`（在飞那一轮的 files/scanned/readBytes/ms）、插件卸载置取消位（扫描在下一个让出点退出并**一定**释放锁）。HTTP 契约与返回体不变，**面板零改动**。
 
-**验证**：`engine.selftest` +7 —— 「异步与同步扫描结果一致（事件逐字节 + 统计口径）」「异步驱动确实让出事件循环（onProgress 被调用）」「取消：明确失败」「取消后不残留写锁与维护窗口」等。
+**第二轮修正（同日实测发现第一版不够，已随本版一并交付）**：第一版让出条件是"每 8 个文件或每 4MB"，重启后**实测不合格** —— 全量扫描期间 `/whale/live` 往返延迟最高 **3857ms**（多数探针 900–3800ms）。根因：单个大日志（实测 3.4MB / 8266 帧）会在**一次** `collectEventsFrom` 调用里整段解完，宿主被独占约 1.6s。修法：`decoder.readTail/decodeLinesFrom` 新增 `maxBytes` 窗口读并返回 `more`/`truncated`；`engine` 新增 `readFileWindows` 生成器 —— 大日志按 **256KB 一片**续读（复用既有的 offset 续扫能力，会话上下文逐片前传），片间与文件间都让出事件循环。**复测：同一份 52.1MB 全量扫描，最大事件循环卡顿 69ms，没有任何一次超过 100ms**（扫描 6.0s，`dupFingerprints=241` → 全部事件被指纹去重、未产生新候选）。同步驱动传 `Infinity` → 一次读完，行为与 v0.7.6 逐字节一致。
+
+**验证**：`engine.selftest` +9 —— 「异步与同步扫描结果一致（事件逐字节 + 统计口径）」「异步驱动确实让出事件循环（onProgress 被调用）」「**窗口化（1KB 片）与整读产出完全相同的事件与水位线**」（120 帧大日志把小窗口路径跑满）「小窗口确实切了多片」「取消：明确失败」「取消后不残留写锁与维护窗口」等。
 
 ### ② `--rebuild` 维护窗口：让路但不丢事件（`repo.cjs` + `engine.cjs` + `live.cjs`，审计第 3 项）
 
@@ -39,7 +41,7 @@
 **验证**：`lifecycle.selftest` 104 → **120**（+16：区外改动不产生待登记、区内改动＝待登记且 exit 0、`--adopt` 后清空待登记且文件内容未改、结构损坏 → exit 1、`remove` 仍要 `--yes`）。
 **流程闭环**：技能文件 §7 增补"入库改写了自动段 / 更新了技能文件之后跑一次 `check --adopt`"，把重新登记纳入日常流程。
 
-**验证汇总**：10 套件 **442 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＝ 13 个测试文件 PASS 累计 **535**（2026-09-12）。新增/变化：`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120。
+**验证汇总**：10 套件 **444 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＝ 13 个测试文件 PASS 累计 **537**（2026-09-12）。新增/变化：`repo` 28→34、`engine` 26→35、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120。
 **生效**：`lifecycle check --adopt` 与漂移分级**立即生效**（命令侧）；`lib/index.js` 的异步扫描 / `scanJob` / `maintenance` 属宿主半边 → **先 `deploy-web --apply` 再重启 `dsh web`**。
 
 ## v0.7.6（2026-09-12）回声自我放大治理 · 暂存污染清理 · 双计口径加固
@@ -264,10 +266,10 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
 | `plugin/src/store/repo.selftest.cjs` | 34 |
-| `plugin/src/collector/engine.selftest.cjs` | 33 |
+| `plugin/src/collector/engine.selftest.cjs` | 35 |
 | `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
 | `plugin/src/collector/e2e.selftest.cjs` | 67 |
 | `plugin/src/collector/live.selftest.cjs` | 48 |
-| **合计** | **442**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **535**） |
+| **合计** | **444**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **537**） |
 
 最近一次全绿：**2026-09-12**（v0.7.7）。

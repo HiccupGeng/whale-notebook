@@ -238,11 +238,12 @@ function wsFromDir(file) {
 }
 
 // 增量批扫：从 offset 起解码新增帧并判定
-// 返回 { events, nextOffset, frames, readFrom, badFrom, partial, sid, ws }
+// 返回 { events, nextOffset, frames, readFrom, badFrom, partial, corruptAt, more, sid, ws }
 //   ws 取「会话记录里的 cwd 名」优先，其次水位线里记下的上一次结果，最后退回目录名——
 //   增量扫描时开头的 session 记录往往不在新增区间内，必须靠水位线继承，否则工作区列会漂移。
-function collectEventsFrom(file, offset, wm) {
-  const dec = decodeLinesFrom(file, offset);
+//   opts.maxBytes（v0.7.7）：一次只解这么多字节 —— 宿主异步扫描把大日志切片，片间让出事件循环。
+function collectEventsFrom(file, offset, wm, opts) {
+  const dec = decodeLinesFrom(file, offset, opts);
   const sid = path.basename(path.dirname(file));
   const st = newSessionCtx(sid, (wm && wm.ws) || wsFromDir(file), wm && wm.calls, wm && wm.cmds);
   const out = [];
@@ -255,6 +256,7 @@ function collectEventsFrom(file, offset, wm) {
   return {
     events: out, nextOffset: dec.nextOffset, frames: dec.frames, readFrom: dec.readFrom,
     badFrom: dec.badFrom, partial: dec.partial, corruptAt: dec.corruptAt || null, // v0.7.5：解码失败分类透传（审计 N20）
+    more: !!dec.more, truncated: !!dec.truncated, // v0.7.7：窗口化续读依据
     sid, ws: st.ws,
     // v0.7.6（A3）：callId→命令摘要 也必须跨窗口继承 —— 增量窗口常常只剩 tool/result，
     //   没了这份映射，出处判定在增量扫描里会失效（与 tool 退化成 '?' 是同一类问题）。

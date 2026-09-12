@@ -198,7 +198,34 @@ for (let i = 0; i < 9; i++) {
   check('v0.7.7 异步 rebuild 返回体与同步路径同形（rebuild=true + 扫描统计）',
     rb.ok === true && rb.data.rebuild === true && !!rb.data.scan, rb.ok ? String(rb.text).slice(0, 80) : rb);
 
-  // ③ 取消：明确失败、释放写锁、关掉维护窗口（卸载路径不许留下半个窗口或一把死锁）
+  // ③ 窗口化聚合正确性：同一份大日志，"1KB 小窗口切片续读" 与 "一次整读" 必须产出**完全相同**的事件与水位线。
+  //   （v0.7.7 第二轮修正：为了让出事件循环，大日志被切成 256KB 片；切片聚合一旦写错，
+  //     症状是"少事件 / 水位线停在半路"，所以必须在单测里用小窗口把切片路径跑满。）
+  const bigDir = pathx.join(repo2.P.sessions, '--W7--', 'sid-big');
+  fsx.mkdirSync(bigDir, { recursive: true });
+  const bigFrames = [];
+  for (let i = 0; i < 120; i++) {
+    const text = JSON.stringify({ type: 'session', time: T0, cwd: 'C:\\ws\\W7' }) + '\n'
+      + JSON.stringify({
+        type: 'tool/result', time: T0 + i,
+        data: { message: { source: { callId: 'b' + i }, content: [{ type: 'tool-result', isError: true, content: [{ type: 'text', text: 'windowed fixture failure #' + i }] }] } },
+      }) + '\n';
+    bigFrames.push(zlibx.zstdCompressSync(Buffer.from(text, 'utf8')));
+  }
+  const bigLog = pathx.join(bigDir, 'session.jsonl.zstd');
+  fsx.writeFileSync(bigLog, Buffer.concat(bigFrames));
+  const stWhole = repo2.emptyState();
+  const wholeOut = scanHistory(stWhole, {}, { full: true });
+  const stSliced = repo2.emptyState();
+  let windows = 0;
+  const slicedOut = await scanHistoryAsync(stSliced, {}, { full: true, ctl: { sliceBytes: 1024, onProgress: () => { windows++; } } });
+  check('v0.7.7 窗口化(1KB 片)与整读产出完全相同的事件与水位线',
+    JSON.stringify(slicedOut.events) === JSON.stringify(wholeOut.events)
+    && JSON.stringify(stSliced.files[bigLog]) === JSON.stringify(stWhole.files[bigLog]),
+    { evWhole: wholeOut.events.length, evSliced: slicedOut.events.length, wmWhole: stWhole.files[bigLog], wmSliced: stSliced.files[bigLog] });
+  check('v0.7.7 小窗口确实切了多片（>5 次让出，切片路径被真正跑到）', windows > 5, windows);
+
+  // ④ 取消：明确失败、释放写锁、关掉维护窗口（卸载路径不许留下半个窗口或一把死锁）
   const cancelled = await runScanAsync('--rebuild', { ctl: { cancelled: () => true, onProgress: () => {} } });
   check('v0.7.7 取消：明确失败（不静默成功）', cancelled.ok === false && cancelled.cancelled === true, cancelled);
   check('v0.7.7 取消后不残留写锁与维护窗口',

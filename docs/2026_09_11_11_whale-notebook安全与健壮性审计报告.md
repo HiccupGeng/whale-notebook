@@ -246,11 +246,11 @@
 
 | 项 | 改动文件 | 验证证据 |
 |---|---|---|
-| **N7 `/whale/scan` 阻塞事件循环** | `src/collector/engine.cjs`（`scanHistory`/`runScanInner` → **生成器 + 双驱动** `driveSync`/`driveAsync`，每 8 文件或每 4MB 让出；新增 `runScanAsync`）、`lib/index.js`（端点改 `await` 异步版 + `scanJob` + 卸载取消位） | `engine.selftest` +7：**异步与同步扫描结果逐字节一致**、onProgress 证明让出、取消后不残留写锁/维护窗口；CLI 仍走同步驱动，退出码与输出口径**零变化** |
+| **N7 `/whale/scan` 阻塞事件循环** | `src/collector/engine.cjs`（`scanHistory`/`runScanInner` → **生成器 + 双驱动** `driveSync`/`driveAsync`；新增 `readFileWindows` 窗口化读单文件与 `runScanAsync`）、`src/collector/decoder.cjs`（`readTail`/`decodeLinesFrom` 增 `maxBytes` 与 `more`/`truncated`）、`src/collector/scanner.cjs`（`collectEventsFrom` 透传 `opts`）、`lib/index.js`（端点改 `await` 异步版 + `scanJob` + 卸载取消位） | `engine.selftest` +9：**异步与同步扫描结果逐字节一致**、onProgress 证明让出、**1KB 窗口切片与整读产出完全相同的事件与水位线**、取消后不残留写锁/维护窗口；CLI 仍走同步驱动，退出码与输出口径**零变化**。**两轮实测**：第一版"每 8 文件/4MB"交付后复测**不合格**（扫描期间 `/whale/live` 往返最高 **3857ms**，因单个 3.4MB 大日志一次整段解完）→ 窗口化（256KB/片）后 **69ms**（52.1MB 全量、6.0s、无一次 >100ms） |
 | **N21 `--rebuild` 与实时采集的窗口** | `src/store/repo.cjs`（`.maintenance.json` 标记：`readMaintenance`/`writeMaintenance`/`clearMaintenance` + `expiresAt` 夹上限）、`engine.cjs`（rebuild 清空前开窗、`finally` 无条件关窗）、`live.cjs`（取锁前读标记 → 让路：缓冲 + 1s 重试 + `heldByMaintenance` 计数）、`lib/index.js`（`/whale/live` 增 `maintenance`） | `engine.selftest`：窗口在让出点可见、结束后关闭；`e2e`：rebuild 后无标记残留；`live.selftest`：让路期间不写盘且事件**一条不丢**；`repo.selftest` +6（TTL 自愈 / 夹上限 / 原子写 / 幂等清除） |
 | **「漂移守卫噪音」+ 连带隐患**（原第 4 项） | `lifecycle/cli.cjs`（`structureProblems`/`zoneHashOf`/`zoneRefs` 三级判定、`check --adopt`、zones 模式按**区内容基线**对账、`applyInstall` 写 `zoneHash`）、`lifecycle/fsx.cjs`（`sha256Text`）、`lifecycle/consts.cjs`（帮助 + 版本 0.2.0）、`plugin/manifest.json`（manifestVersion 0.2.0）、`lifecycle/README.md`、技能 §7 | `lifecycle.selftest` 104→**120**；**本机实测**：迁移前 `check` exit 1（2 条漂移）→ 迁移后 **exit 0**；AGENTS.md 字节前后一致；`remove` 干跑显示"只剥标记区、区外内容保留"；改技能后 → 1 项「待登记」（exit 0）→ `--adopt` → 恢复"通过" |
 
-**口径变化（第四批）**：自检 10 套件 409 → **442 断言**（`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **535**。lifecycle 工具版本 0.1.1 → **0.2.0**（行为变更：check 退出码语义 + 新标志 `--adopt` + 站点清单新增 `zoneHash` 字段）。宿主半边需**先 `deploy-web --apply` 再重启 `dsh web`**；`check --adopt` 与漂移分级立即生效。
+**口径变化（第四批）**：自检 10 套件 409 → **444 断言**（`repo` 28→34、`engine` 26→35、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **537**。lifecycle 工具版本 0.1.1 → **0.2.0**（行为变更：check 退出码语义 + 新标志 `--adopt` + 站点清单新增 `zoneHash` 字段）。宿主半边需**先 `deploy-web --apply` 再重启 `dsh web`**；`check --adopt` 与漂移分级立即生效。
 
 ---
 

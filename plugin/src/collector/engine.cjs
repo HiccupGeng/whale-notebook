@@ -227,8 +227,6 @@ function sessionFiles(settings) {
 
 // v0.7.7（审计第 2 项）：让出的两种驱动 —— 同一个生成器，同步驱动（CLI）忽略让出请求，
 //   异步驱动（宿主 HTTP）在让出点 `await setImmediate`，把事件循环还给宿主。循环体只有一份。
-const YIELD_EVERY_FILES = 8;               // 每 N 个文件让出一次
-const YIELD_EVERY_BYTES = 4 * 1024 * 1024;  // 或每读取 ≥4MB 让出一次（大日志单文件也能让出）
 function driveSync(gen) {
   let r = gen.next();
   while (!r.done) r = gen.next();
@@ -247,29 +245,66 @@ async function driveAsync(gen, ctl) {
   return r.value;
 }
 
+// v0.7.7（审计第 2 项 · 第二轮修正）：窗口化读单文件 —— 实测第一版"每 8 文件或每 4MB 让出"**不够**：
+//   单个大日志（实测 3.4MB / 8266 帧）会在一次 collectEventsFrom 调用里解完，宿主被卡住 ~1.6s
+//   （实测扫描期间 /whale/live 往返延迟最高 3857ms，远超 200ms 的验收线）。
+//   现在按 SLICE_BYTES 切片续读（复用既有的 offset 续扫能力），片间由驱动 await 让出。
+//   同步驱动（ctl=null）传 Infinity → 一次读完，行为与 v0.7.6 完全一致（CLI 输出与退出码零变化）。
+const SLICE_BYTES = 256 * 1024;    // 每片最大字节数：单片耗时约几十毫秒量级
+const MAX_SLICES_PER_FILE = 20000; // 防御：异常文件不死循环（20000 × 256KB ≈ 5GB）
+function* readFileWindows(file, from, sliceBytes, ctl, wm) {
+  const acc = {
+    events: [], nextOffset: from, frames: 0, readFrom: from, badFrom: false, partial: false, corruptAt: null,
+    sid: null, ws: (wm && wm.ws) || '', calls: (wm && wm.calls) || {}, cmds: (wm && wm.cmds) || {},
+  };
+  let cur = from;
+  const carrier = { ws: acc.ws, calls: acc.calls, cmds: acc.cmds }; // 逐片前传的会话上下文
+  for (let i = 0; i < MAX_SLICES_PER_FILE; i++) {
+    let res;
+    try { res = collectEventsFrom(file, cur, carrier, Number.isFinite(sliceBytes) ? { maxBytes: sliceBytes } : undefined); }
+    catch (err) { return null; } // 单文件解码失败：与同步路径同样跳过（badFiles++）
+    for (const ev of res.events) acc.events.push(ev);
+    acc.frames += res.frames;
+    acc.sid = res.sid;
+    acc.ws = res.ws;
+    acc.calls = res.calls;
+    acc.cmds = res.cmds;
+    carrier.ws = res.ws; carrier.calls = res.calls; carrier.cmds = res.cmds;
+    acc.partial = res.partial;
+    if (res.corruptAt && !acc.corruptAt) acc.corruptAt = res.corruptAt; // 第一处损坏就是结论（mid 优先）
+    if (res.badFrom) { acc.badFrom = true; return acc; }
+    const advanced = res.nextOffset > cur;
+    cur = res.nextOffset;
+    acc.nextOffset = cur;
+    if (!advanced || !res.more) return acc;   // 没有进展（半写尾帧/坏帧）或已到文件末尾 → 收工
+    if (ctl) yield;                            // 让出事件循环，再读下一片
+  }
+  return acc;
+}
+
 // 增量/全量扫描：更新 state.files 水位线，返回事件与统计
 function* scanHistoryGen(state, settings, opts) {
   const t0 = Date.now();
   const o = opts || {};
   const full = !!o.full;
   const ctl = o.ctl || null;
+  const sliceBytes = ctl ? (Number.isFinite(ctl.sliceBytes) ? ctl.sliceBytes : SLICE_BYTES) : Infinity;
   const files = sessionFiles(settings);
   const events = [];
   let scanned = 0, skipped = 0, readBytes = 0, resets = 0, retryPending = 0, badFiles = 0;
   let corruptFrames = 0;                 // v0.7.5：非末帧损坏次数（其后的日志读不到）
   const stuckFiles = [];                 // v0.7.5：连续 ≥2 轮仍卡在同一坏帧的文件（最多记 5 条）
-  let sinceYield = 0, bytesSinceYield = 0;
   for (const f of files) {
     let st; try { st = fs.statSync(f.file); } catch { continue; }
     const wm = state.files[f.file];
     if (!full && wm && wm.size === st.size && wm.mtimeMs === st.mtimeMs) { skipped++; continue; }
     const from = full ? 0 : (wm && Number.isFinite(wm.offset) ? wm.offset : 0);
-    let res;
-    try { res = collectEventsFrom(f.file, from, full ? null : wm); }
-    catch (err) { badFiles++; continue; } // 单文件解码失败跳过（v1 行为）
+    let res = yield* readFileWindows(f.file, from, sliceBytes, ctl, full ? null : wm);
+    if (!res) { badFiles++; continue; } // 单文件解码失败跳过（v1 行为）
     if (res.badFrom) {
       resets++; // 水位线失效（截断/轮转）→ 该文件退回全量
-      try { res = collectEventsFrom(f.file, 0, null); } catch (err) { badFiles++; continue; }
+      res = yield* readFileWindows(f.file, 0, sliceBytes, ctl, null);
+      if (!res) { badFiles++; continue; }
     }
     scanned++;
     const readN = Math.max(0, st.size - res.readFrom);
@@ -294,11 +329,9 @@ function* scanHistoryGen(state, settings, opts) {
       cmds: res.cmds || (wm && wm.cmds) || {},
     };
     if (res.partial) retryPending++;
-    sinceYield++; bytesSinceYield += readN;
-    if (ctl && (sinceYield >= YIELD_EVERY_FILES || bytesSinceYield >= YIELD_EVERY_BYTES)) {
-      sinceYield = 0; bytesSinceYield = 0;
+    if (ctl) {
       if (typeof ctl.onProgress === 'function') ctl.onProgress({ files: files.length, scanned, skipped, readBytes });
-      yield;
+      yield; // 每个文件之间也让出一次（小文件密集时同样保持响应）
     }
   }
   events.sort((a, b) => a.at - b.at);

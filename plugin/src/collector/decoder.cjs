@@ -63,13 +63,18 @@ function scanFramesEx(buffer) {
 function scanFrames(buffer) { return scanFramesEx(buffer).frames; }
 
 // 从 offset 起到文件末尾的字节读入内存（只读该区间，不读全文件）
-function readTail(file, offset) {
+// v0.7.7：新增 maxBytes —— 一次最多读这么多字节（窗口化增量解码：宿主异步扫描据此把大日志
+//   切成小片，每片之间让出事件循环；实测 3.4MB 的单文件一次解完会让宿主卡住 ~1.6s）。
+function readTail(file, offset, maxBytes) {
   const size = fs.statSync(file).size;
   let from = Number.isFinite(offset) && offset > 0 ? offset : 0;
   let reset = false;
   if (from > size) { from = 0; reset = true; } // 文件被截断/轮转 → 水位线失效
-  const len = size - from;
-  if (len <= 0) return { buf: Buffer.alloc(0), from, size, reset };
+  const cap = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : Infinity;
+  let len = size - from;
+  const truncated = len > cap;
+  if (truncated) len = cap;
+  if (len <= 0) return { buf: Buffer.alloc(0), from, size, reset, truncated: false };
   const fd = fs.openSync(file, 'r');
   try {
     const buf = Buffer.allocUnsafe(len);
@@ -79,20 +84,23 @@ function readTail(file, offset) {
       if (n <= 0) break;
       got += n;
     }
-    return { buf: got === len ? buf : buf.subarray(0, got), from, size, reset };
+    return { buf: got === len ? buf : buf.subarray(0, got), from, size, reset, truncated };
   } finally {
     fs.closeSync(fd);
   }
 }
 
-// 增量解码：返回 { lines, nextOffset, frames, readFrom, badFrom, partial }
+// 增量解码：返回 { lines, nextOffset, frames, readFrom, badFrom, partial, corruptAt, more, truncated }
 //   nextOffset 只推进到【最后一个成功解码帧】的结束位置 —— 半写帧/坏帧留待下次重试；
 //   badFrom=true 表示 offset 不在帧头（水位线失效），调用方应退回 0 全量重扫该文件；
-//   partial=true 表示尾部存在未完成/损坏帧（水位线已停在其前）。
-function decodeLinesFrom(file, offset) {
+//   partial=true 表示本次窗口尾部存在未完成/损坏帧（水位线已停在其前）；
+//   more=true（v0.7.7）表示 nextOffset 之后还有字节没读（窗口被 maxBytes 截断，或尾巴是半写帧）——
+//     调用方据此决定"再开一个窗口续读"还是"收工等下一轮"。
+function decodeLinesFrom(file, offset, opts) {
   assertZstd();
-  const tail = readTail(file, offset);
-  const out = { lines: [], nextOffset: tail.from, frames: 0, readFrom: tail.from, badFrom: false, partial: false, corruptAt: null };
+  const maxBytes = opts && Number.isFinite(opts.maxBytes) ? opts.maxBytes : Infinity;
+  const tail = readTail(file, offset, maxBytes);
+  const out = { lines: [], nextOffset: tail.from, frames: 0, readFrom: tail.from, badFrom: false, partial: false, corruptAt: null, more: false, truncated: !!tail.truncated };
   if (tail.reset) out.badFrom = true;
   if (!tail.buf.length) return out;
   if (tail.buf.length < 4 || tail.buf.readUInt32LE(0) !== ZSTD_MAGIC) {
@@ -126,6 +134,7 @@ function decodeLinesFrom(file, offset) {
   out.nextOffset = tail.from + consumed;
   // 尾部残留 = 有帧没被消费（半写或解码失败）→ 下次重试；也可能是被截断的半个帧头
   out.partial = stopped || consumed < tail.buf.length;
+  out.more = out.nextOffset < tail.size; // 后面还有字节（窗口截断 / 半写尾帧）
   return out;
 }
 
