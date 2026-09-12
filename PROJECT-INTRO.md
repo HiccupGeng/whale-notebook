@@ -146,7 +146,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 ## 8. 现状与路线图
 
-> 当前 `plugin` 版本 **v0.7.6** ｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
+> 当前 `plugin` 版本 **v0.7.7**（生命周期工具 **v0.2.0**）｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
 
 | 版本 | 一句话 | 状态 |
 |---|---|---|
@@ -164,9 +164,10 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | **0.7.3** | **讨论落点路由**（💬 按候选来源选落点：跨项目 → 固定「鲸鱼全局」工作区／单项目 → 该项目／未知歧义 → 回退当前并说明；页脚三态开关）＋ `/whale/inbox` 归档列修复 ＋ **类别展示契约**（`error` 有标题、文档墙与面板分组排序一致）＋ **CLI 退出码契约**（0/2/1）＋ 面板样式节点回收 | ✅ |
 | **0.7.4** | **安全与健壮性修复（审计 P0 三项）**：① **打码补漏**（Bearer/Basic 认证头、Cookie、URL 内凭据、连接串口令、snake_case 密钥名、`sk_live_`/`xoxb-`/`npm_`/`AIza` 等短前缀令牌此前全部漏网）② **`state.json` 完整性**（严格读：只有 ENOENT 算空状态；损坏先备份 `.corrupt-<ts>` 再报错；临时名带 pid；写前 CAS 比对 + 并集合并；`state.lock` 跨进程写锁；编号下限取归档最大+1 防撞号）③ **归档「已处置」签名修正**（剔除空列 + 接受整列时间戳 + 复发行前缀归一化 + 实时采集也传索引）＋ sidecar 源日志路径打码 / `undefined` 修复 ＋ 编号放宽 `^C\d{3,}$` ＋ `--prewarm --dry` 零写盘 ＋ 面板删除改原子写 | ✅ |
 | **0.7.5** | **端点闸门 + 采集健康度可观测**：8 个 `/whale/*` 统一校验 **Host 回环 / Origin / Sec-Fetch-Site / 写操作必须 JSON**（跨站副作用与 DNS rebinding 读数据均被拒；本机面板与探针不受影响）· `decoder` 增 zstd 能力探测与帧扫描边界检查、`corruptAt=mid/tail` 分类，`scanHistory` 记 `corruptFrames`/`badRounds`/`stuckFiles` 并落 `state.lastScanStats`，`GET /whale/live` 新增 `zstd`/`scan`/`stuckWatermarks`/`diag` | ✅ |
-| **0.7.6** | **回声自我放大治理 + 暂存污染清理 + 双计口径加固**：① **回声落档改「稳定签名 + 幂等追加」**（签名 = `类别\|一句话现象(≤90字)`，与归档列同口径；旧的按聚簇哈希分组会让同一现象每次被打印都新开一行——实测 231 行只对应 77 个现象、单现象最多 8 行）② **签名表补全（A2）**：新增 `META_ARTIFACT`（`seenFingerprints`/`nextCandidateId`/`reAddedAt` 等 state 字段名、`topKeys=`/`parts=N [`/`== clusters sample` 等探针抬头、`\| 时间 \| 类别 \|` 表头）单条即判 + 「`"ok":true` + 我们 API 的键名」信封判据 ③ **按出处整类拦截（A3）**：命令碰过我们的**数据产物/接口**且结果是**我们渲染的结构化输出** → 判回声（只碰 `plugin/src\|lib\|scripts` 的开发调试不算，跑自检发现的真实 bug 继续进箱）④ 当日分片超 400 行自动轮转 `echo-<日期>-2.md`，`/whale/live` 增 `echo`（当日/累计行数）与 `dedup`（`toolUnknown`/`skippedByFingerprint`）⑤ `mine.cjs --forget-echo [--apply]` 清理历史污染（实测 18 组暂存里 13 组 = 72% 是自引用输出，清理后剩 5 组真实发现） | ✅ 当前（宿主半边待重启） |
+| **0.7.6** | **回声自我放大治理 + 暂存污染清理 + 双计口径加固**：① **回声落档改「稳定签名 + 幂等追加」**（签名 = `类别\|一句话现象(≤90字)`，与归档列同口径；旧的按聚簇哈希分组会让同一现象每次被打印都新开一行——实测 231 行只对应 77 个现象、单现象最多 8 行）② **签名表补全（A2）**：新增 `META_ARTIFACT`（`seenFingerprints`/`nextCandidateId`/`reAddedAt` 等 state 字段名、`topKeys=`/`parts=N [`/`== clusters sample` 等探针抬头、`\| 时间 \| 类别 \|` 表头）单条即判 + 「`"ok":true` + 我们 API 的键名」信封判据 ③ **按出处整类拦截（A3）**：命令碰过我们的**数据产物/接口**且结果是**我们渲染的结构化输出** → 判回声（只碰 `plugin/src\|lib\|scripts` 的开发调试不算，跑自检发现的真实 bug 继续进箱）④ 当日分片超 400 行自动轮转 `echo-<日期>-2.md`，`/whale/live` 增 `echo`（当日/累计行数）与 `dedup`（`toolUnknown`/`skippedByFingerprint`）⑤ `mine.cjs --forget-echo [--apply]` 清理历史污染（实测 18 组暂存里 13 组 = 72% 是自引用输出，清理后剩 5 组真实发现） | ✅ |
+| **0.7.7** | **扫描让出事件循环 + rebuild 维护窗口 + 漂移分级（lifecycle 0.2.0）**：① **`scanHistory`/`runScanInner` 改生成器 + 双驱动**，宿主 `runScanAsync` 每 8 文件或 4MB `await setImmediate` → 点 ⟳ 触发全量扫描（实测 44MB ≈5s）时面板/GUI/实时采集不再被独占；`/whale/live` 增 `scanJob`，卸载置取消位（一定释放写锁）② **`--rebuild` 开维护窗口**（`.maintenance.json` + TTL 兜底）：实时采集**让路但不丢事件**（缓冲 + 1s 重试 + `heldByMaintenance` 计数），`finally` 无条件关窗；`/whale/live` 增 `maintenance` ③ **漂移判定分级**：`lifecycle check` 只在缺失/结构损坏（截断/乱码/frontmatter 丢失/必需小节消失）/孤儿/清单待迁移时 exit 1，**「内容变了但结构完好」= 合法演进（「待登记」，exit 0）**，新增 `check --adopt` 重新登记基线；**AGENTS 迁到 `zones` 模式**（只管理两个标记区，区外是用户自己的内容，`remove` 只剥区不删整文件）——实测本机 `check` 由恒 exit 1 变为 exit 0，AGENTS.md 字节未变 | ✅ 当前（宿主半边待重启） |
 
-- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（副本是否最新以 `deploy-web --check` 字节对账为准；权威源已 0.7.6，需 `--apply` 后重启）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫不依赖重启（v0.7.6 的 `--forget-echo`、回声签名与幂等落档在批扫侧**立即生效**）。
+- **待生效提醒**：v0.5–v0.7 的**宿主半边**（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`）**需重启 dsh web** 才生效（副本是否最新以 `deploy-web --check` 字节对账为准；权威源已 0.7.7，需 `--apply` 后重启）；仅改 `lib/client.js` 则刷新页面即可。`mine.cjs` 增量批扫与 `lifecycle/` 不依赖重启（v0.7.6 的 `--forget-echo`、回声签名与幂等落档，v0.7.7 的 `check --adopt` 与漂移分级在**批扫侧/命令侧立即生效**）。
 - **顺序铁律（v0.7.4 补记）**：宿主半边改动必须**先 `deploy-web --apply` 再重启 `dsh web`**；反序等于重启加载的仍是旧副本（曾实测 `/whale/live` 仍自报旧版本）。
 - **回声过滤补漏（v0.7.1／v0.7.2）**：v0.5 的 `isMetaEcho` 只挡「助手叙述 / 探针输出」类回声；**工具结果里对历史日志、sidecar、`state.json` 的转储与 notebook 自渲染行**（例：诊断脚本打印的 `==== L### <kind>` 信封、`| C### | … |` 候选行）不含既有强特征，会被当成新事件开行——实测同一物理事件在复盘会话里被重新开行为候选。v0.7.1 新增单条命中即判的 `META_DUMP` 三类签名（会话日志转储信封 / 会话记录 JSON 信封 / notebook 表行），**只认渲染痕迹、不认失败语义**，故同一失败原文照收；`live.selftest` +4 断言（含「不误伤原文」反证）。**v0.7.2 修正**：表行判据原带 `^` 行首锚，而成功路径会把输出压成单行（`raw.replace(/\s+/g, ' ')`），带锚永远匹配不到——实测「打印 echo 归档行」的命令输出照样进暂存；现改为不锚定，并要求时间戳行后随类别词，免得误伤普通表格（自测 +2，含反证）。宿主半边需重启 dsh web 生效。
 - **回声自我放大治理（v0.7.6）**：前几轮补签名的做法**治标**——实测仍有两类漏网：① 「我们自己的产物」形态（我们 API 的 JSON 信封 `{"ok":true,…"candidate"…}`、`state.json` 的字段名 `"reAddedAt"`、一次性探针的抬头 `topKeys=` / `parts=7 [` / `== clusters sample` / `=== lifecycle/selftest.cjs ===`）② 更根本的是**分组方式**：回声原来按「聚簇哈希 = cat|tool|整段文本」聚合，同一现象第二次被打印时尾部（打印出来的表行、行号、上下文）已变 → 哈希不同 → **新开一行**而不是累加，于是 `archive/echo-*.md` 单调增长（实测 231 行只对应 77 个不同现象，55 个现象有多行、单现象最多 8 行；同一批污染还漏进了候选池：18 组暂存里 13 组 = 72%）。v0.7.6 三层一起改：**签名化**（`类别|一句话现象(≤90字)`，与归档列同口径）+ **幂等落档**（当日已有同签名就不写）+ **补签名 `META_ARTIFACT`**（state 字段名/探针抬头/表头，单条即判，配 5 条真实故障反证）+ **按出处整类拦截**（命令碰过数据产物且结果是渲染输出；只碰源码的开发调试不算）。数据修复：`mine.cjs --forget-echo --apply` 实测清掉 13 组、保留 5 组真实发现。自测 +18 断言（含「同一现象重复打印归档不增长」「幂等可见于 CLI 文本」「出处判定的两条反证」）。**批扫侧立即生效，宿主侧需重启。**
@@ -193,17 +194,17 @@ node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--add|--prewarm|--stats|--fu
                                                                    # 采集 CLI(v1 壳): --check 增量(热启 ~10ms) / --add 暂存冲入待审箱(v0.6) /
                                                                    #   --stats 纯只读 / --full 全量校验 / --rebuild 从头梳理(v0.6.1) / --wall 已解决墙预览(v0.4)
                                                                    #   退出码(v0.7.3): 0 成功(有新发现亦为 0) / 2 前置缺失(sessions 或数据目录不存在) / 1 失败
-node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周期沙盒自测(104 PASS, 含 R 段与"不碰真实部署"反证)
-node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check|install|uninstall detach|remove|purge …
-                                                                   # 生命周期工具(v0.1.1: R 段真登记/对账, detach 驱动 deploy-web)
+node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周期沙盒自测(120 PASS, 含 R 段/漂移分级/adopt/"不碰真实部署"反证)
+node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check[ --adopt]|install|uninstall detach|remove|purge …
+                                                                   # 生命周期工具(v0.2.0: R 段真登记/对账, detach 驱动 deploy-web; check 漂移分级)
 node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--check|--undo]   # R 段唯一写入者(改后需重启 dsh web)
 node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs       # 面板 host 逻辑沙盒自测(63 PASS, 含 v0.7.5 端点闸门 13 条)
 node ~/.dsh/whale-notebook/plugin/src/core/similarity.selftest.cjs # v0.7 相似度/族判定(20 PASS, 含「不得误并」反证)
 node ~/.dsh/whale-notebook/plugin/src/core/privacy.selftest.cjs | summarize.selftest.cjs   # 打码出口(23，v0.7.4 +13 凭据形态) / 一句话(10)
-node ~/.dsh/whale-notebook/plugin/src/store/repo.selftest.cjs      # v0.7.6 状态完整性+回声归档(28: 严格读/损坏留证/临时名/CAS 合并/写锁/编号下限/签名读回+轮转)
+node ~/.dsh/whale-notebook/plugin/src/store/repo.selftest.cjs      # 状态完整性+回声归档+维护标记(34: 严格读/损坏留证/临时名/CAS 合并/写锁/编号下限/签名与轮转/TTL)
 node ~/.dsh/whale-notebook/plugin/src/collector/engine.selftest.cjs | engine.dedup.selftest.cjs | e2e.selftest.cjs | live.selftest.cjs
-                                                                   # 解码分类+回声签名(26，v0.7.6 +5) / 已处置去重(24) / zstd 全链(66，v0.7.6 +3) / 实时+双计不变量(45，v0.7.6 +10)
-node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs         # client bundle 桩检查(v0.4–v0.7.6 结构断言, 含样式节点回收)
+                                                                   # 解码+回声签名+异步/维护窗口(33) / 已处置去重(24) / zstd 全链(67) / 实时+双计+维护让路(48)
+node ~/.dsh/whale-notebook/plugin/scripts/bundle-smoke.cjs         # client bundle 桩检查(v0.4–v0.7.7 结构断言, 含样式节点回收)
 node ~/.dsh/whale-notebook/plugin/scripts/links-doctor.cjs [--json|--root <dir>|--depth <n>|--apply]
                                                                    # 维护体检: 工具主目录悬空链接(死链); 默认只读(exit 3=有悬空), --apply 才删(只摘链接)
 node ~/.dsh/whale-notebook/plugin/scripts/links-doctor.selftest.cjs # 维护工具自测(43 PASS: 只读/根外拒删/目标已修复不删/幂等)

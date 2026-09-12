@@ -16,6 +16,12 @@ function sha256(p) {
   h.update(readBytes(p));
   return 'sha256:' + h.digest('hex');
 }
+// v0.7.8：对"内存里的文本"求同一口径的哈希（AGENTS 标记区内容基线用；不必落临时文件）
+function sha256Text(text) {
+  const h = crypto.createHash('sha256');
+  h.update(Buffer.from(String(text == null ? '' : text), 'utf8'));
+  return 'sha256:' + h.digest('hex');
+}
 
 // 原子写: 同目录 .tmp 再 rename（与 store/repo.cjs 一致）
 function writeAtomic(p, data) {
@@ -60,6 +66,6 @@ function listTop(dir) {
 }
 
 module.exports = {
-  exists, readText, readBytes, isDir, isFile, sha256,
+  exists, readText, readBytes, isDir, isFile, sha256, sha256Text,
   writeAtomic, writeTextAtomic, rmFile, rmTree, copyFile, copyTree, listTop,
 };

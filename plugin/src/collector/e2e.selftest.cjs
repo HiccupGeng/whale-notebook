@@ -258,6 +258,9 @@ try {
     outRebuildAdd.data.rebuild === true && (outRebuildAdd.data.added.length + outRebuildAdd.data.bumped.length) >= 4 &&
     repo.pendingCount(repo.readInboxText()) >= pendingBeforeRebuild, outRebuildAdd.data);
   check('--rebuild 不清 nextCandidateId（编号不与归档冲突）', repo.readState().nextCandidateId > 1);
+  // v0.7.7（审计第 3 项）：维护窗口是"开-用-关"的闭环，结束后不许留下标记文件（否则实时采集会一直让路）
+  check('--rebuild 结束后不残留维护窗口标记', !fs.existsSync(repo.maintenancePath()) && repo.readMaintenance() === null,
+    { path: repo.maintenancePath(), m: repo.readMaintenance() });
 
   // ---- --prewarm 明确提示会消费候选 ----
   const pw = runScan('--prewarm');

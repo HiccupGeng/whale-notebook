@@ -22,7 +22,8 @@ lifecycle 对 R 段只做四件事：**登记、对账、出计划、留快照�
 
 ```text
 node lifecycle/cli.cjs status                              # 阶段 / 三段足迹 / 上次操作（含 R 段对账）
-node lifecycle/cli.cjs check                               # 清单 vs 现场对账 + 孤儿扫描（有问题退出码 1）
+node lifecycle/cli.cjs check                               # 清单 vs 现场对账 + 孤儿扫描（v0.2.0：只有真问题才 exit 1，见 §3.3）
+node lifecycle/cli.cjs check --adopt                       # 把「结构完好但内容已变」的现场重新登记为基线（只改清单 hash，不动文件内容）
 node lifecycle/cli.cjs install                             # 干跑出计划 → 确认后 --apply
 node lifecycle/cli.cjs uninstall detach                    # 仅 R 段（web 面板部署副本 + 挂载行）
 node lifecycle/cli.cjs uninstall remove                    # R + I；D 段（用户记忆）原样保留
@@ -30,7 +31,7 @@ node lifecycle/cli.cjs uninstall purge                     # R + I + D；必须 
 node lifecycle/cli.cjs help
 ```
 
-常用标志：`--apply`（执行；默认干跑）、`--agents-mode whole|zones`、`--seed-dir <目录>`（迁移/新机素材）、
+常用标志：`--apply`（执行；默认干跑）、`--adopt`（check 用：重新登记基线）、`--agents-mode whole|zones`、`--seed-dir <目录>`（迁移/新机素材）、
 `--export-dir <目录>`（purge 必填）、`--yes`（二次确认 / 放行漂移 / 连副本目录一起删）、`--home <目录>`（覆盖 DSH_HOME，自测用）。
 
 退出码：`0` 通过 · `1` 现场有问题 · `2` 被保护闸拒绝（缺导出目录 / 缺 `--yes` / 条件不满足）。
@@ -39,7 +40,12 @@ node lifecycle/cli.cjs help
 
 1. **两段式**：任何写操作默认只出计划，展示给用户确认后才 `--apply`；apply 全程幂等，中断后重跑可续。
 2. **前像快照**：凡改写/删除外部目标，先字节级快照到 `.lifecycle/backups/<时间戳>/<id>.bak`（含 R 段的 patch 文件）。
-3. **漂移守卫**：登记后文件被外部改动，`remove` 会中止并要求 `--yes`（仍先快照留档）。
+3. **漂移守卫（v0.2.0 起分级）**：登记后文件被外部改动，`remove` 会中止并要求 `--yes`（仍先快照留档）。`check` 则分三级：
+   - **exit 1（真问题）**：文件缺失、标记区缺失、**结构损坏**（截断 / 乱码 / frontmatter 丢失 / 必需小节消失）、孤儿、清单待迁移；
+   - **「待登记」（信息级，exit 0）**：内容变了但结构完好 —— 这两个文件本来就会被**合法重写**（AGENTS 自动段随经验入库、skill 随版本迭代），
+     跑 `check --adopt` 重新登记即可清掉。这样 `check` 的红灯重新变得可信（旧版因合法重写而恒 exit 1，信号被稀释）。
+   - **AGENTS 用 `zones` 模式时只对账两个标记区**（区内容基线 `zoneHash`）：你在区外写的东西改了、加了、删了都**不算漂移**；
+     `remove` 也只剥标记区（`whole` 模式才会整文件删除 —— 文件里若有你自己的内容，务必用 zones）。
 4. **R 段对账是信息级**：`check` 会打印 R 段实际状态，但**不参与退出码判定**——因为 R 段的真相由 `deploy-web.cjs` 决定，
    生命周期不该因为"你还没部署"或"你手动撤了部署"而报装坏了；不一致时只提示 `install --apply` 重新登记或 `uninstall detach` 摘除。
 5. **清单版本迁移**：站点清单（`.lifecycle/manifest.json`）里"包内默认清单已不存在"的条目会被丢弃，默认清单新增的条目会被补登记；

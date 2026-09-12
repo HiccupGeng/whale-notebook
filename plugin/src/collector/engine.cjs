@@ -225,15 +225,40 @@ function sessionFiles(settings) {
   return out;
 }
 
+// v0.7.7（审计第 2 项）：让出的两种驱动 —— 同一个生成器，同步驱动（CLI）忽略让出请求，
+//   异步驱动（宿主 HTTP）在让出点 `await setImmediate`，把事件循环还给宿主。循环体只有一份。
+const YIELD_EVERY_FILES = 8;               // 每 N 个文件让出一次
+const YIELD_EVERY_BYTES = 4 * 1024 * 1024;  // 或每读取 ≥4MB 让出一次（大日志单文件也能让出）
+function driveSync(gen) {
+  let r = gen.next();
+  while (!r.done) r = gen.next();
+  return r.value;
+}
+async function driveAsync(gen, ctl) {
+  let r = gen.next();
+  while (!r.done) {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (ctl && typeof ctl.cancelled === 'function' && ctl.cancelled()) {
+      try { gen.return(); } catch { /* 收尾异常无妨 */ }
+      return { ok: false, text: '扫描已取消（插件正在卸载）', cancelled: true };
+    }
+    r = gen.next();
+  }
+  return r.value;
+}
+
 // 增量/全量扫描：更新 state.files 水位线，返回事件与统计
-function scanHistory(state, settings, opts) {
+function* scanHistoryGen(state, settings, opts) {
   const t0 = Date.now();
-  const full = !!(opts && opts.full);
+  const o = opts || {};
+  const full = !!o.full;
+  const ctl = o.ctl || null;
   const files = sessionFiles(settings);
   const events = [];
   let scanned = 0, skipped = 0, readBytes = 0, resets = 0, retryPending = 0, badFiles = 0;
   let corruptFrames = 0;                 // v0.7.5：非末帧损坏次数（其后的日志读不到）
   const stuckFiles = [];                 // v0.7.5：连续 ≥2 轮仍卡在同一坏帧的文件（最多记 5 条）
+  let sinceYield = 0, bytesSinceYield = 0;
   for (const f of files) {
     let st; try { st = fs.statSync(f.file); } catch { continue; }
     const wm = state.files[f.file];
@@ -247,7 +272,8 @@ function scanHistory(state, settings, opts) {
       try { res = collectEventsFrom(f.file, 0, null); } catch (err) { badFiles++; continue; }
     }
     scanned++;
-    readBytes += Math.max(0, st.size - res.readFrom);
+    const readN = Math.max(0, st.size - res.readFrom);
+    readBytes += readN;
     for (const ev of res.events) events.push(Object.assign({}, ev, { file: f.file }));
     // v0.7.5（审计 N20）：中段坏帧 = 真损坏，且该帧之后的内容永远读不到 —— 记轮次，连续 ≥2 轮升级为可见告警
     const badRounds = res.corruptAt === 'mid' ? ((wm && Number.isFinite(wm.badRounds) ? wm.badRounds : 0) + 1) : 0;
@@ -268,6 +294,12 @@ function scanHistory(state, settings, opts) {
       cmds: res.cmds || (wm && wm.cmds) || {},
     };
     if (res.partial) retryPending++;
+    sinceYield++; bytesSinceYield += readN;
+    if (ctl && (sinceYield >= YIELD_EVERY_FILES || bytesSinceYield >= YIELD_EVERY_BYTES)) {
+      sinceYield = 0; bytesSinceYield = 0;
+      if (typeof ctl.onProgress === 'function') ctl.onProgress({ files: files.length, scanned, skipped, readBytes });
+      yield;
+    }
   }
   events.sort((a, b) => a.at - b.at);
   return {
@@ -279,6 +311,8 @@ function scanHistory(state, settings, opts) {
     },
   };
 }
+function scanHistory(state, settings, opts) { return driveSync(scanHistoryGen(state, settings, opts)); }
+function scanHistoryAsync(state, settings, opts) { return driveAsync(scanHistoryGen(state, settings, opts), (opts && opts.ctl) || null); }
 
 // v0.7.5（审计 N20）：把本轮扫描的"健康度"落进 state —— 排障信息（坏帧/待重试/解码失败/卡住的文件）
 //   过去只出现在一次性 CLI 文本里，面板与 /whale/live 看不到，于是"半瘫"没人知道。
@@ -724,11 +758,33 @@ function runScan(mode, opts) {
   if (willWrite && !release) {
     return { ok: false, text: `写入锁不可用（${repo.stateDiag.lastLockError || 'timeout'}；另一个采集进程正在扫描或写盘），请稍后重试` };
   }
-  try { return runScanInner(mode, o); }
+  try { return driveSync(runScanGen(mode, o, null)); }
   finally { if (release) release(); }
 }
 
-function runScanInner(mode, o) {
+// v0.7.7（审计第 2 项）：宿主侧异步入口 —— 与 runScan 同形返回，差别只有三点：
+//   ① 用异步写锁（await repo.acquireLock，不阻塞事件循环等锁）；② 扫描主体在让出点 await setImmediate；
+//   ③ 支持 ctl.cancelled() 取消（插件卸载时用，保证一定释放锁）。
+//   CLI 仍走同步 runScan：退出码语义与输出口径零变化。
+async function runScanAsync(mode, opts) {
+  const o = opts || {};
+  const ctl = o.ctl || null;
+  if (!fs.existsSync(repo.P.sessions)) return { ok: false, text: 'no sessions root' };
+  if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
+  if (!zstdAvailable()) return { ok: false, text: ZSTD_REQUIRED_MSG };
+  const willWrite = o.dry !== true && mode !== '--stats';
+  let release = null;
+  if (willWrite) {
+    release = await repo.acquireLock(1500);
+    if (!release) {
+      return { ok: false, text: `写入锁不可用（${repo.stateDiag.lastLockError || 'timeout'}；另一个采集进程正在扫描或写盘），请稍后重试` };
+    }
+  }
+  try { return await driveAsync(runScanGen(mode, o, ctl), ctl); }
+  finally { if (release) release(); }
+}
+
+function* runScanGen(mode, o, ctl) {
   const t0 = Date.now();
   if (!fs.existsSync(repo.P.sessions)) return { ok: false, text: 'no sessions root' };
   if (!fs.existsSync(repo.P.nb)) return { ok: false, text: 'whale-notebook dir missing: ' + repo.P.nb };
@@ -754,20 +810,35 @@ function runScanInner(mode, o) {
   // 语义：「第一次梳理」——水位线/指纹/聚簇/暂存全部清掉，历史里的每个坑都会被重新发现；
   // 候选编号继续递增（nextCandidateId 保留），不会与 archive/ 里的历史编号冲突。
   // 拉取式（autoAdd=false）下结果只进暂存，箱子不会被动增长；要入箱加 --add。
+  // v0.7.7（审计第 3 项）：重建前先开**维护窗口**（repo.writeMaintenance）——宿主侧实时采集见到标记
+  //   就让路（事件留在内存缓冲、不写盘、不丢），窗口在 finally 里无条件关闭（成功/失败/异常都关），
+  //   进程被强杀时靠 expiresAt 自愈。语义上是"可见、有序、可恢复"，不是"暂停采集"。
   const rebuild = mode === '--rebuild';
-  if (rebuild) {
-    state.files = {};
-    state.clusters = {};
-    state.deferred = {};
-    state.seenFingerprints = [];
+  let maintenanceOn = false;
+  try {
+    if (rebuild) {
+      if (!o.dry) maintenanceOn = repo.writeMaintenance({ kind: 'rebuild', expiresAt: Date.now() + 120000 });
+      state.files = {};
+      state.clusters = {};
+      state.deferred = {};
+      state.seenFingerprints = [];
+    }
+    // --stats/--prewarm 语义上是全量；settings.scanMode='full' 强制全量
+    const full = rebuild || o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
+    // v0.6.2：已处置签名索引（见 loadResolvedIndex）。重建时聚簇被清空，无需剔除；
+    // 正常扫描时把「已开行的聚簇」从索引剔除，让它们走既有的复发语义（开「复发（原 C0xx）」行）而不是被压掉。
+    const resolvedIndex = loadResolvedIndex();
+    if (!rebuild) pruneResolvedIndex(state, resolvedIndex);
+    const scan = yield* scanHistoryGen(state, settings, { full, ctl });
+    return yield* runScanTail(mode, o, { t0, state, settings, scan, rebuild, resolvedIndex });
+  } finally {
+    if (maintenanceOn) repo.clearMaintenance();
   }
-  // --stats/--prewarm 语义上是全量；settings.scanMode='full' 强制全量
-  const full = rebuild || o.full === true || mode === '--stats' || mode === '--prewarm' || settings.scanMode === 'full';
-  // v0.6.2：已处置签名索引（见 loadResolvedIndex）。重建时聚簇被清空，无需剔除；
-  // 正常扫描时把「已开行的聚簇」从索引剔除，让它们走既有的复发语义（开「复发（原 C0xx）」行）而不是被压掉。
-  const resolvedIndex = loadResolvedIndex();
-  if (!rebuild) pruneResolvedIndex(state, resolvedIndex);
-  const scan = scanHistory(state, settings, { full });
+}
+
+// --stats / --prewarm / 默认(--check|--rebuild) 的收尾（与扫描分离，便于生成器在扫描点让出）
+function* runScanTail(mode, o, ctxIn) {
+  const { t0, state, settings, scan, rebuild, resolvedIndex } = ctxIn;
   const s = scan.stats;
   const scanLine = `解码 ${s.scanned}/${s.files} 文件（未更新跳过 ${s.skipped}）｜读取 ${(s.readBytes / 1048576).toFixed(2)}MB` +
     (s.resets ? `｜水位线重置 ${s.resets}` : '') + (s.retryPending ? `｜待重试 ${s.retryPending}` : '') +
@@ -890,7 +961,7 @@ function buildDetailMd(cid, r) {
 }
 
 module.exports = {
-  runScan, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, ingestFresh, markSeen, flushDeferred, buildDetailMd,
+  runScan, runScanAsync, clusterKey, fpOf, findWorkspaceDirs, sessionFiles, scanHistory, scanHistoryAsync, ingestFresh, markSeen, flushDeferred, buildDetailMd,
   // v0.7.6（回声自我放大治理）：回声稳定签名 + 历史污染清理
   echoSig, echoSigOf, forgetEchoDeferred,
   // v0.6.2：已处置签名索引（防重置后重扫重复开行）

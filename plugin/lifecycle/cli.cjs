@@ -23,14 +23,61 @@ function wrapTail(text, rules, privacy, tail) {
   return head + '\n\n' + privacy.begin + '\n' + tail + '\n' + privacy.end + '\n';
 }
 
+// ---------------- v0.7.8（审计第 4 项）：漂移判定的"分级" ----------------
+// 背景：check 原来对 I 段文件做**整文件 hash 比对**。但这两个文件都会被**合法重写**：
+//   · AGENTS.md 的自动段每次经验入库都会重写；
+//   · skill 每次版本迭代都会被更新。
+//   于是 `check` 恒 exit 1，"真损坏"与"我只是正常更新过"再也分不开（信号被稀释）。
+// 现在分三级：
+//   ① fails（exit 1）：缺失 / 区缺失 / **结构损坏**（截断、乱码、frontmatter 丢失、必需小节消失）
+//   ② diffs（remove 仍要求 --yes）：内容与登记不一致 —— 删除前确认真的是你想要的
+//   ③ stale（信息级，不影响退出码）：内容变了但**结构完好** = 一次合法演进，提示跑 `check --adopt` 重新登记
+// 另：AGENTS 在 zones 模式下**只对账两个标记区**（区外是你自己的内容，永不算漂移）。
+
+// 区内容基线：两个标记区正文按固定顺序拼接后的 sha256（区外内容完全不参与）
+function zoneHashOf(text, rules, privacy) {
+  const rb = Z.zoneBody(text, rules.begin, rules.end);
+  const pb = Z.zoneBody(text, privacy.begin, privacy.end);
+  if (rb === null || pb === null) return null;
+  return X.sha256Text(rb + '\u0000' + pb);
+}
+
+// 结构校验：返回问题列表（空数组 = 结构完好）。
+// 只判"能不能用"，不判"内容对不对"——避免把正常演进误判成损坏。
+const SKILL_MIN_BYTES = 2000;
+function structureProblems(id, raw, ctx) {
+  const probs = [];
+  const text = String(raw == null ? '' : raw);
+  if (!text) return ['内容为空'];
+  // 乱码/截断的通用特征：UTF-8 解码出现替换字符
+  if (text.indexOf('\uFFFD') !== -1) probs.push('含非法 UTF-8 替换字符（文件可能被截断或以错误编码写入）');
+  if (id === 'skill') {
+    if (Buffer.byteLength(text, 'utf8') < SKILL_MIN_BYTES) probs.push(`字节数过小（<${SKILL_MIN_BYTES}，疑似被截断）`);
+    if (!/^---\r?\n[\s\S]*?\r?\n---/.test(text)) probs.push('缺少 frontmatter（--- 元信息块）');
+    if (!/^name:\s*\S+/m.test(text)) probs.push('frontmatter 缺 name 字段');
+    if (!/^description:\s*\S+/m.test(text)) probs.push('frontmatter 缺 description 字段');
+    if (!/##\s*工作流/.test(text)) probs.push('缺少「## 工作流」小节（技能的执行流程入口）');
+    if ((text.match(/^##\s+/gm) || []).length < 3) probs.push('小节过少（<3 个 ## 标题）');
+    if (text.indexOf('whale-notebook') === -1) probs.push('正文未提及 whale-notebook（疑似被整体替换）');
+  } else if (id === 'agents' && ctx && ctx.zones) {
+    for (const z of ctx.zones) {
+      const body = Z.zoneBody(text, z.begin, z.end);
+      if (body === null) probs.push(`标记区缺失：${z.label}`);
+      else if (!body.trim()) probs.push(`标记区为空：${z.label}`);
+    }
+  }
+  return probs;
+}
+
 // ---------------- 参数解析 ----------------
 function parseArgv(argv) {
-  const flags = { apply: false, agentsMode: null, seedDir: null, exportDir: null, yes: false, home: null };
+  const flags = { apply: false, agentsMode: null, seedDir: null, exportDir: null, yes: false, home: null, adopt: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') flags.apply = true;
     else if (a === '--yes') flags.yes = true;
+    else if (a === '--adopt') flags.adopt = true; // v0.7.8：check --adopt 重新登记 I 段基线
     else if (a === '--agents-mode') flags.agentsMode = argv[++i] || null;
     else if (a === '--seed-dir') flags.seedDir = argv[++i] ? path.resolve(argv[i]) : null;
     else if (a === '--export-dir') flags.exportDir = argv[++i] ? path.resolve(argv[i]) : null;
@@ -48,9 +95,15 @@ function entryPath(home, def, site) {
   return C.resolvePathTpl(def.path, M.ctxOf(home));
 }
 
+// 从默认条目取两个区的定义（顺序固定：规则自动段 → 隐私提示区），供 zoneHashOf 使用
+function zoneRefs(def, labels) {
+  const pick = (label) => (def.zones || []).find((z) => z.label === label) || { begin: '\u0000absent', end: '\u0000absent' };
+  return [pick(labels.rules), pick(labels.privacy)];
+}
+
 // ---------------- 现场评估: 每 installed/removed 条目 vs 现场; 孤儿扫描 ----------------
 function assess(home, view) {
-  const res = { diffs: [], fails: [], orphans: [], runtime: [] };
+  const res = { diffs: [], fails: [], orphans: [], runtime: [], stale: [] };
   for (const { def, site } of view.entries) {
     const st = site ? site.state : def.state;
     if (st === 'deferred' || st === 'pending') continue;
@@ -76,18 +129,32 @@ function assess(home, view) {
         continue;
       }
       if (isAgents && zonesMode) {
+        // zones 模式（v0.7.8）：**只对账两个标记区** —— 区外是你自己的内容，改了永不算漂移。
         if (!present) { res.fails.push(`缺: ${p} (AGENTS.md)`); continue; }
         const text = X.readText(p);
         for (const label of [L.rules, L.privacy]) {
           const z = (def.zones || []).find((zz) => zz.label === label);
           if (z && !Z.hasZone(text, z.begin, z.end)) res.fails.push(`区缺: ${p} 无「${label}」标记`);
         }
+        const probs = structureProblems('agents', text, { zones: (def.zones || []).map((z) => ({ label: z.label, begin: z.begin, end: z.end })) });
+        if (probs.length) res.fails.push(`结构损坏: ${p} —— ${probs.join('；')}`);
+        else if (site.zoneHash) {
+          const live = zoneHashOf(text, ...zoneRefs(def, L));
+          if (live && live !== site.zoneHash) res.stale.push(`标记区内容已变: ${p}（登记 ${site.zoneHash.slice(7, 19)}… ≠ 现场 ${live.slice(7, 19)}…；区外内容不参与判定）`);
+        } else {
+          res.stale.push(`尚未登记标记区基线: ${p}（跑 check --adopt 即可建立，之后才能看出区内容被动过）`);
+        }
         continue;
       }
       if (present) {
         const cur = X.sha256(p);
         if (site.hashAfter && site.hashAfter !== cur) {
+          // v0.7.8：内容变了 → 一律记 diffs（remove 仍要求 --yes，删除前确认是你想要的）；
+          //   再看结构：结构损坏 = 真问题（fails，exit 1）；结构完好 = 合法演进（stale，信息级）
           res.diffs.push(`漂移: ${p} 登记 ${site.hashAfter.slice(0, 12)}… ≠ 现场 ${(cur || '').slice(0, 12)}…`);
+          const probs = structureProblems(def.id, X.readText(p), { zones: (def.zones || []).map((z) => ({ label: z.label, begin: z.begin, end: z.end })) });
+          if (probs.length) res.fails.push(`结构损坏: ${p} —— ${probs.join('；')}`);
+          else res.stale.push(`内容已变(结构完好): ${p}（登记 ${site.hashAfter.slice(7, 19)}… ≠ 现场 ${String(cur).slice(7, 19)}…）`);
         }
       } else {
         res.fails.push(`缺: ${p} (state=installed)`);
@@ -295,12 +362,16 @@ function cmdStatus(home) {
 }
 
 // ---------------- check ----------------
-function cmdCheck(home) {
+// v0.7.8（审计第 4 项）：退出码只反映**真问题**（缺失/结构损坏/孤儿/待迁移）；
+//   "内容变了但结构完好" = 一次合法演进 → 打印为「待登记」并提示 `check --adopt`。
+//   这样 check 的红灯重新变得可信（原来因 AGENTS/skill 每次合法重写而恒 exit 1）。
+function cmdCheck(home, flags) {
   const view = M.mergedView(home);
   const site = view.site;
   if (!site) out('check', '未安装（无站点清单）— 仅做足迹扫描:');
   const a = assess(home, view);
   for (const d of a.diffs) out('check', `差异: ${d}`);
+  for (const s of a.stale) out('check', `待登记: ${s}`);
   for (const f of a.fails) out('check', `失败: ${f}`);
   for (const o of a.orphans) out('check', `孤儿: ${o}`);
   for (const r of a.runtime) {
@@ -314,12 +385,46 @@ function cmdCheck(home) {
     process.exitCode = 1;
     return;
   }
-  if (!a.diffs.length && !a.fails.length && !a.orphans.length) {
-    out('ok', `check 通过: I/D 段清单 vs 现场一致, 无孤儿(已对账 R 段 ${a.runtime.length} 条)`);
-  } else {
-    out('err', `check 未通过: 失败 ${a.fails.length} / 差异 ${a.diffs.length} / 孤儿 ${a.orphans.length}`);
-    process.exitCode = 1;
+  if (flags && flags.adopt) { adoptEntries(home, view, a); return; }
+  if (!a.fails.length && !a.orphans.length) {
+    const tail = a.stale.length
+      ? `（另有 ${a.stale.length} 项「待登记」：内容已合法演进、结构完好；跑 check --adopt 重新登记即可清掉）`
+      : '';
+    out('ok', `check 通过: I/D 段清单 vs 现场一致(结构完好), 无孤儿(已对账 R 段 ${a.runtime.length} 条)${tail}`);
+    return;
   }
+  out('err', `check 未通过: 失败 ${a.fails.length} / 结构完好但待登记 ${a.stale.length} / 孤儿 ${a.orphans.length}（失败与孤儿才是真问题）`);
+  process.exitCode = 1;
+}
+
+// check --adopt：把 I 段"内容已合法演进"的现场**重新登记**（只更新清单里的 hash 基线，不碰文件内容）
+function adoptEntries(home, view, a) {
+  const site = view.site;
+  if (!site) { out('err', 'adopt 需要已安装（无站点清单）'); process.exitCode = 1; return; }
+  const ctx = M.ctxOf(home);
+  let n = 0;
+  for (const { def, site: se } of view.entries) {
+    if (!se || def.segment !== 'I' || def.kind === 'dir') continue;
+    const st = se.state;
+    if (st !== 'installed') continue;
+    const p = entryPath(home, def, se);
+    if (!X.exists(p)) continue;
+    const text = X.readText(p);
+    const probs = structureProblems(def.id, text, { zones: (def.zones || []).map((z) => ({ label: z.label, begin: z.begin, end: z.end })) });
+    if (probs.length) { out('warn', `跳过 ${def.id}: 结构损坏，先修内容再登记 —— ${probs.join('；')}`); continue; }
+    const before = se.hashAfter;
+    se.hashAfter = X.sha256(p);
+    se.adoptedAt = C.isoLocal();
+    if (def.id === 'agents' && se.agentsMode === 'zones') {
+      const [r, pv] = zoneRefs(def, L);
+      se.zoneHash = zoneHashOf(text, r, pv);
+    }
+    if (before !== se.hashAfter) n++;
+    out('ok', `已重新登记 ${def.id}: ${String(se.hashAfter).slice(0, 19)}…${def.id === 'agents' && se.zoneHash ? ` · 区基线 ${se.zoneHash.slice(7, 19)}…` : ''}`);
+  }
+  if (!n) out('info', '没有需要重新登记的条目（现场与登记一致）');
+  M.saveSite(home, site);
+  out('ok', `adopt 完成: 更新 ${n} 条登记基线（文件内容未改动）`);
 }
 
 // ---------------- install: 计划 ----------------
@@ -463,7 +568,9 @@ function applyInstall(home, flags, p) {
       }
       if (cur !== before) { X.writeTextAtomic(agentsPath, cur); touched++; }
       else out('ok', 'I: AGENTS zones 标记区齐备, 零改动');
-      setEntry('agents', { state: 'installed', agentsMode: 'zones', adoptedAt: C.isoLocal(), hashAfter: null });
+      // v0.7.8：zones 模式登记**区内容基线**（区外是你自己的内容，永不参与漂移判定）
+      const zr = zoneRefs(p.def.entries.find((e) => e.id === 'agents'), L);
+      setEntry('agents', { state: 'installed', agentsMode: 'zones', adoptedAt: C.isoLocal(), hashAfter: X.sha256(agentsPath), zoneHash: zoneHashOf(X.readText(agentsPath), zr[0], zr[1]) });
     } else if (!X.exists(agentsPath)) {
       const seedAgents = flags.seedDir ? path.join(flags.seedDir, C.AGENTS_FILE) : null;
       const latest = M.latestBackup(home, 'agents');
@@ -763,7 +870,7 @@ function main() {
   const home = C.resolveHome(flags.home);
   try {
     if (cmd === 'status') cmdStatus(home);
-    else if (cmd === 'check') cmdCheck(home);
+    else if (cmd === 'check') cmdCheck(home, flags);
     else if (cmd === 'install') cmdInstall(home, flags);
     else if (cmd === 'uninstall') cmdUninstall(home, level, flags);
     else { out('err', `未知命令: ${cmd}`); console.log(C.HELP); process.exitCode = 2; }

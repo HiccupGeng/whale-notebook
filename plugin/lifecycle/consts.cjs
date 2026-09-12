@@ -3,7 +3,7 @@
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.1.1';
+const VERSION = '0.2.0'; // v0.2.0（2026-09-12）：check 漂移分级（合法演进=待登记 / 结构损坏=exit 1）+ check --adopt + zones 模式区内容基线
 const PLUGIN_NAME = '@deepseek-ai/dsh-whale-notebook';
 const AGENTS_FILE = 'AGENTS.md';
 const SKILL_FILE = 'whale-notebook.md';
@@ -119,6 +119,7 @@ const HELP = `dsh-whale-notebook lifecycle ${VERSION} — 安装/卸载/清单�
 
 标志:
   --apply                     执行（默认 dry-run 只输出计划）
+  --adopt                     （check 用）把 I 段"内容已合法演进"的现场重新登记为基线（不改文件内容）
   --agents-mode whole|zones   AGENTS.md 归属模式（默认 whole = 整文件属本插件）
   --seed-dir <dir>            素材源目录（内含 AGENTS.md / whale-notebook.md,
                               目标缺失时用于创建; 迁移/全新机用）

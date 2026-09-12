@@ -200,6 +200,38 @@ async function acquireLock(waitMs = 5000) {
   }
 }
 
+// ---- 维护窗口标记（v0.7.7，审计第 3 项）----
+// 用途：`--rebuild` 这类"清派生状态后从头梳理"的动作期间，宿主侧实时采集要**让路但不能丢事件**。
+//   为什么用独立小文件而不是写进 state.json：① live 每轮 flush 都要判断，读一个 ~120 字节的标记
+//   比解析整个 state 便宜得多；② 不必给 state 加字段、也就不必改 CAS 合并语义（加字段的合并策略
+//   一旦写错就会把"正在重建"这个状态丢掉）；③ 进程被强杀时靠 expiresAt 自愈，不依赖任何清理逻辑。
+const MAINTENANCE_MAX_MS = 10 * 60 * 1000; // 标记最长有效 10 分钟（远超 rebuild 实测 5s，防写坏的超长值）
+function maintenancePath() { return path.join(P.nb, '.maintenance.json'); }
+// 读标记：不存在/损坏/已过期 → null（过期时顺手清理，读路径不做重活）
+function readMaintenance(now) {
+  const t = Number.isFinite(now) ? now : Date.now();
+  let raw;
+  try { raw = fs.readFileSync(maintenancePath(), 'utf8'); } catch { return null; }
+  let m = null;
+  try { m = JSON.parse(raw); } catch { m = null; }
+  if (!m || typeof m !== 'object') return null;
+  if (!Number.isFinite(m.expiresAt) || m.expiresAt <= t) { clearMaintenance(); return null; }
+  return m;
+}
+function writeMaintenance(m) {
+  if (!fs.existsSync(P.nb)) return false; // 数据目录不存在：不建目录，直接视为"无窗口"
+  const now = Date.now();
+  const obj = Object.assign({ kind: 'maintenance', pid: process.pid, startedAt: now }, m || {});
+  if (!Number.isFinite(obj.expiresAt) || obj.expiresAt - now > MAINTENANCE_MAX_MS) obj.expiresAt = now + MAINTENANCE_MAX_MS;
+  const tmp = tmpNameFor(maintenancePath());
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj), 'utf8');
+    fs.renameSync(tmp, maintenancePath());
+    return true;
+  } catch { try { fs.unlinkSync(tmp); } catch { /* 清理失败无妨 */ } return false; }
+}
+function clearMaintenance() { try { fs.unlinkSync(maintenancePath()); return true; } catch { return false; } }
+
 // ---- inbox ----
 function readInboxText() { return fs.existsSync(P.inbox) ? fs.readFileSync(P.inbox, 'utf8') : ''; }
 function pendingCount(text) { return (text.match(/^\| C\d+ /gm) || []).length; }
@@ -509,6 +541,8 @@ module.exports = {
   readJson, writeJson, readJsonStrict, statOf, tmpNameFor, mergeStates, stateDiag,
   readSettings, readState, emptyState, normalizeState, writeState,
   lockPath, acquireLock, acquireLockSync, unlockState,
+  // v0.7.7：维护窗口标记（rebuild 期间实时采集让路但不丢事件）
+  maintenancePath, readMaintenance, writeMaintenance, clearMaintenance, MAINTENANCE_MAX_MS,
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows, appendEchoArchive,
   // v0.7.6（回声自我放大治理）：回声签名去重 + 健康度观测
   readEchoSignatures, echoStats, ECHO_MAX_ROWS,

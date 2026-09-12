@@ -9,6 +9,8 @@ const zlibx = require('node:zlib');
 const tmpHome = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'whale-eng-'));
 process.env.DSH_HOME = tmpHome;
 const { buildDetailMd } = require('./engine.cjs');
+// v0.7.7：异步块要用到 runScanAsync / scanHistoryAsync（scanHistory 已在下方既有的解构里）
+const { runScanAsync, scanHistoryAsync } = require('./engine.cjs');
 let fails = 0;
 function check(name, cond, extra) {
   if (cond) { console.log('PASS ' + name); }
@@ -159,7 +161,53 @@ if (fx) {
     appliedOut.removed === 2 && Object.keys(stateF.deferred).length === 1 && !!stateF.deferred.real3,
     { removed: appliedOut.removed, left: Object.keys(stateF.deferred) });
 }
-try { fsx.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
+// ---- v0.7.7（审计第 2/3 项）：异步扫描（让出事件循环）与 --rebuild 维护窗口 ----
+// 造 9 份小日志：≥1 个让出点（每 8 个文件一次），才能观测 onProgress 与"窗口正开着"的瞬间。
+fsx.mkdirSync(repo2.P.nb, { recursive: true }); // runScanAsync 的前置检查要求数据目录存在
+for (let i = 0; i < 9; i++) {
+  const d = pathx.join(repo2.P.sessions, '--W7--', 'sid-' + String(i).padStart(2, '0'));
+  fsx.mkdirSync(d, { recursive: true });
+  const line = JSON.stringify({ type: 'session', time: T0, cwd: 'C:\\ws\\W7' }) + '\n'
+    + JSON.stringify({
+      type: 'tool/result', time: T0 + i * 1000,
+      data: { message: { source: { callId: 'x' + i }, content: [{ type: 'tool-result', isError: true, content: [{ type: 'text', text: 'v0.7.7 fixture failure #' + i }] }] } },
+    }) + '\n';
+  fsx.writeFileSync(pathx.join(d, 'session.jsonl.zstd'), zlibx.zstdCompressSync(Buffer.from(line, 'utf8')));
+}
 
-console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
-process.exit(fails === 0 ? 0 : 1);
+(async () => {
+  // ① 同步/异步两条驱动必须产出**完全相同**的事件与扫描统计（同一生成器、两个驱动，永不漂移）
+  const stSync = repo2.emptyState();
+  const stAsync = repo2.emptyState();
+  const syncOut = scanHistory(stSync, {}, { full: true });
+  let progressSeen = 0;
+  const asyncOut = await scanHistoryAsync(stAsync, {}, { full: true, ctl: { onProgress: () => { progressSeen++; } } });
+  check('v0.7.7 异步与同步扫描结果一致（事件逐字节 + 统计口径）',
+    JSON.stringify(syncOut.events) === JSON.stringify(asyncOut.events)
+    && syncOut.stats.scanned === asyncOut.stats.scanned && syncOut.stats.readBytes === asyncOut.stats.readBytes,
+    { sync: syncOut.stats, async: asyncOut.stats });
+  check('v0.7.7 异步驱动确实让出事件循环（onProgress 被调用）', progressSeen >= 1, progressSeen);
+
+  // ② rebuild 期间维护窗口开启、结束后无条件关闭
+  let markerDuring = null;
+  const rb = await runScanAsync('--rebuild', { ctl: { onProgress: () => { markerDuring = repo2.readMaintenance(); } } });
+  check('v0.7.7 rebuild 期间维护窗口开启（让出点可见 kind=rebuild）',
+    !!markerDuring && markerDuring.kind === 'rebuild', markerDuring);
+  check('v0.7.7 rebuild 结束后维护窗口关闭（标记文件已清理）',
+    rb.ok === true && repo2.readMaintenance() === null && !fsx.existsSync(repo2.maintenancePath()), repo2.readMaintenance());
+  check('v0.7.7 异步 rebuild 返回体与同步路径同形（rebuild=true + 扫描统计）',
+    rb.ok === true && rb.data.rebuild === true && !!rb.data.scan, rb.ok ? String(rb.text).slice(0, 80) : rb);
+
+  // ③ 取消：明确失败、释放写锁、关掉维护窗口（卸载路径不许留下半个窗口或一把死锁）
+  const cancelled = await runScanAsync('--rebuild', { ctl: { cancelled: () => true, onProgress: () => {} } });
+  check('v0.7.7 取消：明确失败（不静默成功）', cancelled.ok === false && cancelled.cancelled === true, cancelled);
+  check('v0.7.7 取消后不残留写锁与维护窗口',
+    !fsx.existsSync(repo2.lockPath()) && !fsx.existsSync(repo2.maintenancePath()) && repo2.readMaintenance() === null,
+    { lock: fsx.existsSync(repo2.lockPath()), mk: repo2.readMaintenance() });
+})()
+  .catch((err) => { fails++; console.error('FAIL v0.7.7 异步块异常 :: ' + (err && err.stack ? err.stack : err)); })
+  .then(() => {
+    try { fsx.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
+    console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
+    process.exit(fails === 0 ? 0 : 1);
+  });

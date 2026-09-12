@@ -35,7 +35,8 @@ function createLiveCollector(opts) {
     //   toolUnknown：工具名没解析出来（'?'）的事件数。tool 是聚簇键的一部分，B == '?' 会让同一物理事件
     //     在 live 与批扫两侧算出不同聚簇键 → 唯一残留的双计路径。长期为 0 即说明该风险不成立。
     //   skippedByFingerprint：入库时因"指纹已见"跳过的条数（live 与批扫共用同一指纹的正面证据）。
-    toolUnknown: 0, skippedByFingerprint: 0 };
+    //   heldByMaintenance：因维护窗口（--rebuild）让路而推迟入库的轮次数（v0.7.7：让路但不丢事件）。
+    toolUnknown: 0, skippedByFingerprint: 0, heldByMaintenance: 0 };
 
   function ctxOf(session) {
     const sid = String((session && session.id) || '?');
@@ -76,6 +77,16 @@ function createLiveCollector(opts) {
         const settings = repo.readSettings();
         if (settings.autoCollect === false || settings.liveCapture === false) {
           stats.skipped += batch.length;
+          return null;
+        }
+        // v0.7.7（审计第 3 项）：维护窗口（如 CLI `--rebuild`）期间**让路但不丢事件** ——
+        //   事件原样留在缓冲、1s 后重试；窗口靠标记文件的 expiresAt 自愈（进程被强杀也不会永久停写）。
+        const m = repo.readMaintenance();
+        if (m) {
+          buffer = batch.concat(buffer);
+          stats.heldByMaintenance = (stats.heldByMaintenance || 0) + 1;
+          if (!timer && !disposed) timer = setTimeout(() => { timer = null; flush(); }, 1000);
+          log.debug(`[whale-notebook] 维护窗口进行中（${m.kind}），本轮实时入库推迟（${buffer.length} 条事件留在缓冲）`);
           return null;
         }
         // v0.7.4（审计 N5）：与 CLI 扫描 / 面板删除互斥（它们持有同一把锁）。

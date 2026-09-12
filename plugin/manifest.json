@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "plugin": "@deepseek-ai/dsh-whale-notebook",
-  "manifestVersion": "0.1.1",
+  "manifestVersion": "0.2.0",
   "comment": "包内默认清单（随插件包版本化）。install --apply 时按此 realize 出站点清单 <dshHome>/whale-notebook/.lifecycle/manifest.json（含实际 hash/state/时间戳）。路径模板变量: {dshHome} = DSH_HOME(默认 ~/.dsh), {nbDir} = {dshHome}/whale-notebook。条目即卸载白名单: 卸载只允许删除/还原清单内条目; 清单外一律不碰。state=probe 的条目(R 段运行时)不写死状态: install --apply 现场探测记 installed|absent, 且其写入/摘除动作由 manifest 声明的 managedBy 工具(scripts/deploy-web.cjs)执行, lifecycle 只登记与对账。",
   "entries": [
     {

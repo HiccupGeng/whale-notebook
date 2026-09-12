@@ -374,8 +374,25 @@ EXIT=1
 | 3.1 A4 轮转与观测 | ✅ `ECHO_MAX_ROWS=400` 自动轮转 `echo-<日期>-2.md`（跨分片签名去重仍生效）；`/whale/live` 增 `echo`（`day/files/rows/bytes/totalFiles/totalRows/cap`） | `repo.selftest` +5（签名读回、轮转文件名、跨分片去重、`echoStats`） |
 | 3.1 数据修复 | ✅ `mine.cjs --forget-echo [--apply]`（默认干跑、持锁写回） | 干跑 13 条与人工分诊一致；`--apply` 后暂存 **18 → 5 组**（保留 5 条真实发现），`seen=215`/`next=137` 未变，无 `.lock`/`.tmp` 残留 |
 | 3.5 双计加固 | ✅ 结论：**实测不成立，不改指纹**；改为 `live.stats.toolUnknown`（唯一残留路径的观测口径）＋ `skippedByFingerprint`（两侧共用指纹的正面证据），并入 `/whale/live.dedup`；单测加不变量 | 实验：`n=1`（双计应为 2）、`fp` 不变、`25/25 sid` 与目录名一致、`at\|hash` 跨 sid 重复 0 组；`live.selftest`：「live 与批扫指纹逐字节一致」 |
-| 3.2 / 3.3 / 3.4 | ⏸ 未做（批次 B / C） | 见下 |
+| 3.2 / 3.3 / 3.4 | ✅ 已落地（批次 B + C 合并为 v0.7.7，见附录 D） | 见下 |
 
-**测试口径**：10 套件 **409 断言全绿**（`repo` 23→28、`engine` 21→26、`e2e` 63→66、`live` 35→45）；13 个测试文件 PASS 累计 **502**。
+**测试口径（批次 A）**：10 套件 **409 断言全绿**（`repo` 23→28、`engine` 21→26、`e2e` 63→66、`live` 35→45）；13 个测试文件 PASS 累计 **502**。
 **生效差异**：回声判定/幂等落档、`--forget-echo` **批扫侧立即生效**；`/whale/live` 新字段属宿主半边，需**先 `deploy-web --apply` 再重启 `dsh web`**。
-**下一批（B，v0.7.7）**：3.2 `/whale/scan` 分片异步化（保持 HTTP 契约不变）＋ 3.3 `--rebuild` 维护窗口（`state.maintenance` + TTL + live 让路）。**批次 C（v0.7.8）** 待你对 `agentsMode: zones` 的迁移拍板后再启动。
+
+---
+
+## 附录 D：批次 B + C 实施记录（v0.7.7，2026-09-12 回填）
+
+> 用户裁定"剩余的帮我修改完毕"（含批准 `zones` 迁移）。原计划 B=v0.7.7 / C=v0.7.8，因 B 需要一次重启而 C 不需要，**合并为 v0.7.7**，避免让你重启两次。相对原设计有两处实现层面的偏离，都记录在下面（结论：更简单、更安全）。
+
+| 计划项 | 落地情况 | 证据 |
+|---|---|---|
+| 3.2 `/whale/scan` 异步化 | ✅ **不做 202+jobId**，改为把 `scanHistory`/`runScanInner` 做成**生成器 + 双驱动**（同步驱动给 CLI、异步驱动给宿主），每 8 文件或每 4MB `await setImmediate`。HTTP 契约与返回体**完全不变量 → 面板零改动**；另加异步取锁（等锁也不阻塞）、`/whale/live.scanJob` 可观测、卸载取消位（保证释放写锁） | `engine.selftest` +7：「异步与同步结果一致（事件逐字节 + 统计口径）」「让出点确实被触发（onProgress）」「取消：明确失败」「取消后不残留写锁与维护窗口」 |
+| 3.3 `--rebuild` 维护窗口 | ✅ 原设计用 `state.maintenance` 字段；实施改为**独立标记文件** `.maintenance.json`（读它比解析整个 state 便宜；不必给 state 加字段 → 也就不必改 CAS 合并语义）+ `expiresAt` TTL 兜底 + `finally` 无条件关窗。live 在**取锁前**先读它，命中就让路：事件留在缓冲、1s 后重试、`heldByMaintenance` 计数，**一条不丢** | `engine.selftest`「窗口开启（让出点可见）」+「结束后关闭」；`e2e.selftest`「rebuild 后不残留标记」；`live.selftest`「flush 让路不写盘」+「窗口关闭后缓冲补上」；`repo.selftest` +6（TTL 自愈 / 夹上限 / 原子写 / 幂等清除） |
+| 3.4 L1 注册模式迁移 | ✅ 已执行 `install --apply --agents-mode zones`：**AGENTS.md 字节未变**（sha256 前后一致），`uninstall remove` 干跑现显示「AGENTS.md 标记区(zones; 区外内容保留)」 | 迁移前 `check` exit 1（2 条漂移）→ 迁移后 **exit 0** |
+| 3.4 L2 判定改造 | ✅ **三级分级**：exit 1 只给"缺失 / 结构损坏（截断、非法 UTF-8、frontmatter 丢失、缺 `## 工作流`、小节过少等）/ 孤儿 / 清单待迁移"；「内容变了但结构完好」= **待登记**（信息级，exit 0）；`remove` 仍用 diffs 要求 `--yes`（删除前确认）；zones 模式**只对账两个标记区**（区内容基线 `zoneHash`）——你在区外写的东西改了/加了/删了都**不算漂移** | `lifecycle.selftest` 104→**120**：区外改动零待登记、区内改动＝待登记且 exit 0、结构损坏 exit 1、`remove` 仍要 `--yes`、adopt 不改文件内容 |
+| 3.4 L3 流程闭环 | ✅ 新增 `check --adopt`（只更新清单基线、**不碰任何文件内容**；结构损坏的条目拒绝登记）+ 技能 §7 增补"入库改写自动段 / 更新技能后跑一次 adopt"；lifecycle 工具 0.1.1 → **0.2.0** | 实测：改完技能 → `check` 报 1 项待登记（exit 0）→ `check --adopt` → 重新登记 agents（含区基线）与 skill → `check` 恢复「通过」 |
+
+**测试口径（v0.7.7）**：10 套件 **442 断言全绿**（`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **535**。
+**生效差异**：漂移分级与 `check --adopt` 属**命令侧、立即生效**；异步扫描 / `scanJob` / `maintenance` 属宿主半边，需**先 `deploy-web --apply` 再重启 `dsh web`**（本次已 `--apply`，`--check` exit 0）。
+**五项全部收口**：① 回声自我放大（v0.7.6）② 扫描异步化（v0.7.7）③ rebuild 维护窗口（v0.7.7）④ 漂移守卫（v0.7.7）⑤ 双计（实测不成立，已用计数器 + 不变量断言钉住）。审计清单里其余项（N7 已随之解决、N10–N17、N27–N29 等）仍按原优先级保留。

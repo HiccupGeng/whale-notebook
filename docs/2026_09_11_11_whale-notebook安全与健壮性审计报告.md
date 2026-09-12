@@ -240,7 +240,17 @@
 | **数据修复：清理已污染暂存**（用户批准） | `src/collector/cli.cjs`（`--forget-echo [--apply]`）、`engine.forgetEchoDeferred()` | 干跑清单与人工分诊完全一致（13 条）；执行后暂存 **18 → 5 组**（保留沙箱拒写 / DNS+TCP443 / SSH 公钥 / 工具超时 / 未知工具名 5 条真实发现），`seenFingerprints` 215、`nextCandidateId` 137 未变，无 `.lock`/`.tmp` 残留 |
 
 **口径变化（第三批）**：自检由 10 套件 386 → **409 断言**（`repo.selftest` 23→28、`engine.selftest` 21→26、`e2e.selftest` 63→66、`live.selftest` 35→45）；13 个测试文件 PASS 累计 **502**。宿主半边（`/whale/live` 新字段）需**先 `deploy-web --apply` 再重启 `dsh web`**；回声判定/幂等落档与 `--forget-echo` 在批扫侧立即生效。
-**追加发现（第 4 项"漂移守卫"前置）**：`.lifecycle/manifest.json` 里 `agents` 条目登记为 `whole` 模式（"整文件归本插件所有，卸载整文件删除"），而该文件现已含用户「手动段（用户自写区）」→ `uninstall remove/purge` 会连用户手写内容一起删除。用户指示**稍后单独讨论再决定**是否改 `zones`，本批未动。
+**追加发现（第 4 项"漂移守卫"前置）**：`.lifecycle/manifest.json` 里 `agents` 条目登记为 `whole` 模式（"整文件归本插件所有，卸载整文件删除"），而该文件现已含用户「手动段（用户自写区）」→ `uninstall remove/purge` 会连用户手写内容一起删除。（**已在 v0.7.7 处置**：迁移到 `zones` 模式，见下。）
+
+### 实施记录（第四批，v0.7.7 —— 五项遗留问题梳理里的批次 B + C）
+
+| 项 | 改动文件 | 验证证据 |
+|---|---|---|
+| **N7 `/whale/scan` 阻塞事件循环** | `src/collector/engine.cjs`（`scanHistory`/`runScanInner` → **生成器 + 双驱动** `driveSync`/`driveAsync`，每 8 文件或每 4MB 让出；新增 `runScanAsync`）、`lib/index.js`（端点改 `await` 异步版 + `scanJob` + 卸载取消位） | `engine.selftest` +7：**异步与同步扫描结果逐字节一致**、onProgress 证明让出、取消后不残留写锁/维护窗口；CLI 仍走同步驱动，退出码与输出口径**零变化** |
+| **N21 `--rebuild` 与实时采集的窗口** | `src/store/repo.cjs`（`.maintenance.json` 标记：`readMaintenance`/`writeMaintenance`/`clearMaintenance` + `expiresAt` 夹上限）、`engine.cjs`（rebuild 清空前开窗、`finally` 无条件关窗）、`live.cjs`（取锁前读标记 → 让路：缓冲 + 1s 重试 + `heldByMaintenance` 计数）、`lib/index.js`（`/whale/live` 增 `maintenance`） | `engine.selftest`：窗口在让出点可见、结束后关闭；`e2e`：rebuild 后无标记残留；`live.selftest`：让路期间不写盘且事件**一条不丢**；`repo.selftest` +6（TTL 自愈 / 夹上限 / 原子写 / 幂等清除） |
+| **「漂移守卫噪音」+ 连带隐患**（原第 4 项） | `lifecycle/cli.cjs`（`structureProblems`/`zoneHashOf`/`zoneRefs` 三级判定、`check --adopt`、zones 模式按**区内容基线**对账、`applyInstall` 写 `zoneHash`）、`lifecycle/fsx.cjs`（`sha256Text`）、`lifecycle/consts.cjs`（帮助 + 版本 0.2.0）、`plugin/manifest.json`（manifestVersion 0.2.0）、`lifecycle/README.md`、技能 §7 | `lifecycle.selftest` 104→**120**；**本机实测**：迁移前 `check` exit 1（2 条漂移）→ 迁移后 **exit 0**；AGENTS.md 字节前后一致；`remove` 干跑显示"只剥标记区、区外内容保留"；改技能后 → 1 项「待登记」（exit 0）→ `--adopt` → 恢复"通过" |
+
+**口径变化（第四批）**：自检 10 套件 409 → **442 断言**（`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120）；13 个测试文件 PASS 累计 **535**。lifecycle 工具版本 0.1.1 → **0.2.0**（行为变更：check 退出码语义 + 新标志 `--adopt` + 站点清单新增 `zoneHash` 字段）。宿主半边需**先 `deploy-web --apply` 再重启 `dsh web`**；`check --adopt` 与漂移分级立即生效。
 
 ---
 

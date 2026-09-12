@@ -1,7 +1,46 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.6`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.1.1`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.7`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+
+## v0.7.7（2026-09-12）扫描让出事件循环 · rebuild 维护窗口 · 漂移分级与 check --adopt
+
+**起因**：接 `docs/2026_09_11_14_whale-notebook五项遗留问题解决方案.md` 的**批次 B（第 2/3 项）与批次 C（第 4 项）**，用户裁定"剩余的帮我修改完毕"。（原计划 B=v0.7.7、C=v0.7.8，因 C 不需要重启而 B 需要一次重启，故合并为一个版本，免得让你重启两次。）
+
+### ① `/whale/scan` 让出事件循环（`engine.cjs` + `lib/index.js`，审计第 2 项）
+
+**问题**：`POST /whale/scan` 的处理器里 `engine.runScan('--check')` 是**同步**调用，`scanHistory` 全程同步 IO（`statSync`/`readFileSync`/`zstdDecompressSync`）。实测增量扫描 23–53ms（无感），但水位线失效或全量时 **44.43MB ≈ 5084ms**，这段时间宿主 Node 事件循环被独占——面板其它端点、实时采集去抖器、GUI 自身请求全部排队。
+
+**修法**：把 `scanHistory` 与 `runScanInner` 的主体改为**生成器**，配两个驱动：同步驱动（CLI，`driveSync` 忽略让出请求 → 退出码与输出口径**零变化**）与异步驱动（宿主 `runScanAsync`，在让出点 `await setImmediate`）。让出条件 = 每 8 个文件或每读取 ≥4MB；循环体只有一份，两条路永不漂移。宿主侧另加：异步取写锁（`await repo.acquireLock`，等锁也不阻塞）、`/whale/live` 新增 `scanJob`（在飞那一轮的 files/scanned/readBytes/ms）、插件卸载置取消位（扫描在下一个让出点退出并**一定**释放锁）。HTTP 契约与返回体不变，**面板零改动**。
+
+**验证**：`engine.selftest` +7 —— 「异步与同步扫描结果一致（事件逐字节 + 统计口径）」「异步驱动确实让出事件循环（onProgress 被调用）」「取消：明确失败」「取消后不残留写锁与维护窗口」等。
+
+### ② `--rebuild` 维护窗口：让路但不丢事件（`repo.cjs` + `engine.cjs` + `live.cjs`，审计第 3 项）
+
+**问题**：`--rebuild` 清空派生状态后从头梳理全部历史（实测 ≈5s），期间实时采集仍在旁边写：写锁挡住了互相覆盖，但外部**看不出"正在重建"**，重建与实时写入的先后关系也没有任何约定。
+
+**修法**：`--rebuild` 在清空之前先写一个**维护窗口标记** `~/.dsh/whale-notebook/.maintenance.json`（`{kind,pid,startedAt,expiresAt}`，`expiresAt` 上限夹到 10 分钟），`finally` 里无条件关闭（成功/失败/异常都关）。实时采集在**取锁之前**先读这个标记（独立小文件，比解析整个 state 便宜得多，也不必给 state 加字段、不必动 CAS 合并语义）：命中就让路——事件原样留在内存缓冲、1s 后重试、`live.heldByMaintenance` 计数，**一条都不丢**。进程被强杀时靠 `expiresAt` 自愈（过期标记在读取时自动清理）。`/whale/live` 新增 `maintenance`。
+
+**验证**：`engine.selftest`「rebuild 期间维护窗口开启（让出点可见 kind=rebuild）」「结束后关闭」；`e2e.selftest`「--rebuild 结束后不残留维护窗口标记」；`live.selftest`「维护窗口：flush 让路（不写盘）」「窗口关闭后缓冲补上（事件一条不丢）」；`repo.selftest` +6（TTL 过期自愈、超长有效期夹到上限、原子写、幂等清除）。
+
+### ③ 漂移守卫分级 + `check --adopt` + AGENTS 迁 zones（`lifecycle/`，审计第 4 项；工具版本 0.1.1 → **0.2.0**）
+
+**问题**（实测）：`lifecycle check` 恒 exit 1，两条"差异"分别是 AGENTS.md 与 skill —— 而这两个文件**本来就会被合法重写**（AGENTS 自动段随每次经验入库重写；skill 随版本迭代更新），登记 hash 停在安装那一刻。于是"真损坏"和"我只是正常更新过"再也分不开，信号被稀释。**附带发现一个真隐患**：`manifest.json` 里 `agents` 条目登记为 `whole` 模式（"整文件归本插件所有，卸载整文件删除"），而该文件已含用户的「手动段（用户自写区）」→ `uninstall remove/purge` 会把用户手写内容一起删掉。
+
+**修法**：把漂移判定**分三级** ——
+- **exit 1（真问题）**：文件缺失、标记区缺失、**结构损坏**（截断 / 非法 UTF-8 替换字符 / frontmatter 丢失 / 缺 `## 工作流` / 小节过少 / 正文未提及本插件）、孤儿、清单待迁移；
+- **diffs（`remove` 仍要求 `--yes`）**：内容与登记不一致 —— 删除前确认；
+- **stale「待登记」（信息级，exit 0）**：内容变了但**结构完好** = 一次合法演进，提示跑 `check --adopt`。
+
+新增 `check --adopt`：把 I 段"合法演进过"的现场**重新登记为基线**（只更新清单里的 hash，**不碰任何文件内容**；结构损坏的条目拒绝登记并提示先修）。
+另：**AGENTS 条目迁移到 `zones` 模式**（`install --apply --agents-mode zones`）——此后只对账两个标记区（区内基线 `zoneHash`），**区外用户内容改了/加了/删了都不算漂移**，`remove` 也只剥区、绝不整文件删除。
+
+**实测（本机真实 home）**：迁移前 `check` → exit 1（2 条漂移）；迁移后 → **exit 0**；迁移过程 **AGENTS.md 字节未变**（迁移前后 sha256 一致）；`uninstall remove` 干跑输出「AGENTS.md 标记区(zones; **区外内容保留**)」。
+**验证**：`lifecycle.selftest` 104 → **120**（+16：区外改动不产生待登记、区内改动＝待登记且 exit 0、`--adopt` 后清空待登记且文件内容未改、结构损坏 → exit 1、`remove` 仍要 `--yes`）。
+**流程闭环**：技能文件 §7 增补"入库改写了自动段 / 更新了技能文件之后跑一次 `check --adopt`"，把重新登记纳入日常流程。
+
+**验证汇总**：10 套件 **442 PASS / 0 FAIL** ＋ `bundle-smoke` ＋ `redact.test` 22 ＋ `links-doctor.selftest` 43 ＋ `discuss-route.selftest` 28 ＝ 13 个测试文件 PASS 累计 **535**（2026-09-12）。新增/变化：`repo` 28→34、`engine` 26→33、`e2e` 66→67、`live` 45→48、`lifecycle` 104→120。
+**生效**：`lifecycle check --adopt` 与漂移分级**立即生效**（命令侧）；`lib/index.js` 的异步扫描 / `scanJob` / `maintenance` 属宿主半边 → **先 `deploy-web --apply` 再重启 `dsh web`**。
 
 ## v0.7.6（2026-09-12）回声自我放大治理 · 暂存污染清理 · 双计口径加固
 
@@ -219,16 +258,16 @@ skill + scripts 落地：AGENTS 标记注入链路打通，采集/打码/指纹/
 
 | 套件 | 断言数 |
 |---|---|
-| `plugin/lifecycle/selftest.cjs` | 104 |
+| `plugin/lifecycle/selftest.cjs` | 120 |
 | `plugin/src/ui/server.selftest.cjs` | 63 |
 | `plugin/src/core/privacy.selftest.cjs` | 23 |
 | `plugin/src/core/summarize.selftest.cjs` | 10 |
 | `plugin/src/core/similarity.selftest.cjs` | 20 |
-| `plugin/src/store/repo.selftest.cjs` | 28 |
-| `plugin/src/collector/engine.selftest.cjs` | 26 |
+| `plugin/src/store/repo.selftest.cjs` | 34 |
+| `plugin/src/collector/engine.selftest.cjs` | 33 |
 | `plugin/src/collector/engine.dedup.selftest.cjs` | 24 |
-| `plugin/src/collector/e2e.selftest.cjs` | 66 |
-| `plugin/src/collector/live.selftest.cjs` | 45 |
-| **合计** | **409**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **502**） |
+| `plugin/src/collector/e2e.selftest.cjs` | 67 |
+| `plugin/src/collector/live.selftest.cjs` | 48 |
+| **合计** | **442**（+ `scripts/bundle-smoke.cjs` 结构断言 + `scripts/redact.test.cjs` 22 断言 + `scripts/links-doctor.selftest.cjs` 43 + `scripts/discuss-route.selftest.cjs` 28 ＝ 13 个测试文件 PASS 累计 **535**） |
 
-最近一次全绿：**2026-09-12**（v0.7.6）。
+最近一次全绿：**2026-09-12**（v0.7.7）。

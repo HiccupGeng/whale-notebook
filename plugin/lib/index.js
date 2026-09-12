@@ -12,7 +12,7 @@ import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 import { zstdAvailable } from '../src/collector/decoder.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.6' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.7' };
 
 function sendJson(res, code, obj) {
   try {
@@ -159,7 +159,13 @@ export function apply(ctx) {
   }), 'whale-notebook: GET /whale/related');
 
   // ---- v0.5：面板 ⟳ 触发的增量扫描（先把实时缓冲落盘，再按水位线扫新增）----
+  // v0.7.7（审计第 2 项）：改走 `engine.runScanAsync` —— 扫描主体按"每 8 个文件 / 每 4MB"让出事件循环，
+  //   全量扫描（实测 44MB ≈5s）期间宿主不再被独占（面板其它端点、实时采集去抖器、GUI 都照常响应）。
+  //   HTTP 契约与返回体**不变**（面板零改动）；插件卸载时置取消位，扫描在下一个让出点退出并释放锁。
   let scanning = false;
+  let scanJob = null;      // 正在飞的那一轮（/whale/live 可见）；空闲为 null
+  let scanCancelled = false;
+  ctx.effect(() => () => { scanCancelled = true; }, 'whale-notebook: 扫描取消位（卸载时让在飞的扫描尽快收尾）');
   ctx.effect(() => web.register({
     kind: 'exact',
     path: '/whale/scan',
@@ -167,9 +173,15 @@ export function apply(ctx) {
       if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
       if (scanning) return sendJson(res, 409, { ok: false, error: '扫描进行中，请稍后重试' });
       scanning = true;
+      scanJob = { running: true, startedAt: Date.now(), files: 0, scanned: 0, skipped: 0, readBytes: 0, ms: 0 };
       try {
         if (live) { try { await live.flush(); } catch (err) { /* 实时落盘失败不阻断批扫 */ } }
-        const out = engine.runScan('--check');
+        const out = await engine.runScanAsync('--check', {
+          ctl: {
+            cancelled: () => scanCancelled,
+            onProgress: (p) => { if (scanJob) Object.assign(scanJob, p, { ms: Date.now() - scanJob.startedAt }); },
+          },
+        });
         if (!out.ok) return sendJson(res, 500, { ok: false, error: out.text });
         sendJson(res, 200, {
           ok: true,
@@ -184,6 +196,7 @@ export function apply(ctx) {
         });
       } finally {
         scanning = false;
+        scanJob = null;
       }
     }),
   }), 'whale-notebook: POST /whale/scan');
@@ -212,6 +225,9 @@ export function apply(ctx) {
         diag: Object.assign({}, repo.stateDiag),
         // v0.7.6（审计第 1 项 A4）：回声归档在不在长（自我放大的观测口径）
         echo: repo.echoStats(),
+        // v0.7.7（审计第 2/3 项）：正在飞的扫描（让出事件循环后可观测）＋ 维护窗口（rebuild 期间 live 让路）
+        scanJob: scanJob,
+        maintenance: repo.readMaintenance(),
         // v0.7.6（审计第 5 项加固）：与批扫"是否双计"的两个口径 ——
         //   toolUnknown（应为 0）与 skippedByFingerprint（>0 说明 live 与批扫共用同一指纹）
         dedup: liveStatus ? { toolUnknown: liveStatus.toolUnknown || 0, skippedByFingerprint: liveStatus.skippedByFingerprint || 0 } : null,

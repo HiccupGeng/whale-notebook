@@ -231,6 +231,26 @@ function evResult(cid, text, isError, t) {
     check('实时撞见已处置签名 → 不开新行', repo.pendingCount(repo.readInboxText()) === beforeRows,
       { before: beforeRows, after: repo.pendingCount(repo.readInboxText()), inbox: repo.readInboxText().trim().slice(-120) });
     await live4.dispose();
+
+    // ---- ⑨ v0.7.7（审计第 3 项）：维护窗口期间让路但不丢事件 ----
+    // 背景：`--rebuild` 会清空派生状态并从头梳理历史；期间实时采集若照写，就与"重建后的世界"交错。
+    //   语义是"让路 + 不丢"：事件留在内存缓冲、1s 后重试；窗口由标记文件的 expiresAt 兜底自愈。
+    const live5 = createLiveCollector({ logger, flushMs: 5 });
+    // ⑥ 段把 liveCapture 关掉了，这里要先恢复（否则会走"开关关闭"分支而不是维护窗口分支）
+    fs.writeFileSync(path.join(nb, 'settings.json'), JSON.stringify({ autoCollect: true, liveCapture: true }), 'utf8');
+    repo.writeMaintenance({ kind: 'rebuild', expiresAt: Date.now() + 60000 });
+    const heldBefore = repo.pendingCount(repo.readInboxText());
+    live5.onEvent(SESSION, evResult('cm1', 'fatal: cannot flush while rebuilding', true, T0 + 30000));
+    await live5.flush();
+    const s5 = live5.status();
+    check('维护窗口：flush 让路（heldByMaintenance ≥1 且不写盘）',
+      s5.heldByMaintenance >= 1 && repo.pendingCount(repo.readInboxText()) === heldBefore && s5.buffered === 1, s5);
+    check('维护窗口标记可读回（kind=rebuild）', (repo.readMaintenance() || {}).kind === 'rebuild', repo.readMaintenance());
+    repo.clearMaintenance();
+    await live5.flush();
+    check('窗口关闭后缓冲补上（事件一条不丢）',
+      repo.pendingCount(repo.readInboxText()) === heldBefore + 1 && live5.status().buffered === 0, live5.status());
+    await live5.dispose();
   } catch (err) {
     fails++;
     console.error('FAIL 未捕获异常 :: ' + (err && err.stack ? err.stack : err));

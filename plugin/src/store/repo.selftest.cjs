@@ -130,6 +130,28 @@ check('轮转后签名集合覆盖两个分片（去重仍生效）',
   repo.readEchoSignatures().has('error|轮转后的新行') && repo.readEchoSignatures().has('error|我们自己的探针输出')
   && afterRoll.files === 2 && afterRoll.totalRows === repo.ECHO_MAX_ROWS + 3, afterRoll);
 
+// ---------- ⑧ v0.7.7：维护窗口标记（rebuild 期间实时采集"让路但不丢事件"的信号）----------
+check('无标记时读到 null', repo.readMaintenance() === null);
+check('写标记 → 可读回且带 pid/kind', (() => {
+  repo.writeMaintenance({ kind: 'rebuild', expiresAt: Date.now() + 60000 });
+  const m = repo.readMaintenance();
+  return !!m && m.kind === 'rebuild' && m.pid === process.pid;
+})(), repo.readMaintenance());
+check('标记写入是原子的（无 .tmp 残留）', fs.readdirSync(tmp).filter((n) => n.endsWith('.tmp')).length === 0, fs.readdirSync(tmp));
+check('过期标记自动失效并清理（进程被强杀也不永久停写）', (() => {
+  repo.writeMaintenance({ kind: 'rebuild', expiresAt: Date.now() - 1 });
+  const m = repo.readMaintenance();
+  return m === null && !fs.existsSync(repo.maintenancePath());
+})(), fs.existsSync(repo.maintenancePath()));
+check('超长有效期被夹到上限（写坏的值不会把采集锁死）', (() => {
+  repo.writeMaintenance({ kind: 'rebuild', expiresAt: Date.now() + 86400000 });
+  const m = repo.readMaintenance();
+  const ok = !!m && m.expiresAt - Date.now() <= repo.MAINTENANCE_MAX_MS + 1000;
+  repo.clearMaintenance();
+  return ok;
+})(), repo.readMaintenance());
+check('清除标记幂等（重复清除不抛）', repo.clearMaintenance() === false && repo.clearMaintenance() === false, repo.readMaintenance());
+
 console.log(fails === 0 ? 'ALL PASS' : `FAILED: ${fails}`);
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
 process.exit(fails === 0 ? 0 : 1);

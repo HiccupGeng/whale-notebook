@@ -209,23 +209,85 @@ function f4ZonesMode() {
   const re = fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8');
   ok(re.includes('<!-- whale-notebook:rules -->') && re.includes('<!-- whale-notebook:privacy -->'), 'F4e 标记区重建');
   ok(re.startsWith(AGENTS_USER.trimStart()), 'F4e 用户内容保留');
+
+  // ---- v0.7.8（审计第 4 项）：zones 模式下"区外改动"不算漂移；"区内改动"= 待登记（信息级，不 exit 1）----
+  fs.appendFileSync(path.join(home, 'AGENTS.md'), '\n## 我后来自己加的一段（区外）\n\n- 用户内容追加\n');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F4f 用户在区外追加内容 → check 仍通过（区外不参与漂移判定）');
+  ok(!r.text.includes('待登记'), 'F4f 区外改动不产生「待登记」');
+  // 区内改动（模拟一次经验入库重写了自动段）
+  const zoned2 = fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8')
+    .replace('状态：尚未完成首轮经验审核，暂无规则条目。', '状态：1 条全局规则生效中（自测注入）');
+  fs.writeFileSync(path.join(home, 'AGENTS.md'), zoned2);
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F4g 区内容变化 = 合法演进 → check 通过（不再恒 exit 1）');
+  expectText(r, '待登记', 'F4g 以「待登记」如实提示');
+  r = run(['check', '--adopt', '--home', home]);
+  expectExit(r, 0, 'F4h check --adopt 重新登记区基线');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F4h adopt 后 check 通过');
+  ok(!r.text.includes('待登记'), 'F4h adopt 后不再有待登记项');
+  ok(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8').includes('自测注入'), 'F4h adopt 不修改文件内容(区内容原样保留)');
 }
 
-// ================= F5: 漂移守卫(remove 需 --yes) =================
+// ================= F5: 漂移分级（soft=待登记不拦 check / hard=结构损坏 exit 1 / remove 仍要 --yes） =================
+// v0.7.8：结构探测需要一个"结构完好"的 skill —— 用可编程生成的长文本，避免把断言建立在真实技能内容上。
+const SKILL_VALID = [
+  '---',
+  'name: whale-notebook',
+  'description: 鲸鱼闪闪发光的小本本（自测用结构完好样本）',
+  '---',
+  '',
+  '# whale-notebook — 自测样本',
+  '',
+  '## 架构速览',
+  '',
+  '- whale-notebook 自测种子内容。',
+  '',
+  '## 隐私铁律（每次执行前默念）',
+  '',
+  '- 先展示后写入。',
+  '',
+  '## 工作流',
+  '',
+  '- 运行 mine.cjs --check。',
+  '',
+  '## 记录格式与口径',
+  '',
+  ...Array.from({ length: 40 }, (_, i) => `- 填充行 ${i}：保证字节数超过结构校验下限。`),
+  '',
+].join('\n');
+
 function f5DriftGuard() {
-  console.log('\n[F5] 漂移守卫: 登记后文件被改 → remove 需 --yes');
+  console.log('\n[F5] 漂移分级: 合法演进=待登记(不拦 check) / 结构损坏=exit 1 / remove 仍需 --yes');
   const home = path.join(TMP, 'f5-home');
   const seed = path.join(TMP, 'f5-seed');
-  mkSeed(seed, SKILL_SRC, null);
+  mkSeed(seed, SKILL_VALID, null);
   mkNb(home);
   run(['install', '--apply', '--home', home, '--seed-dir', seed]);
-  // 现场漂移(skill 被外部改动)
+  // 现场漂移(skill 被外部改动) —— 结构仍完好
   fs.appendFileSync(path.join(home, 'skills/whale-notebook.md'), '\n- 外部改动\n');
   let r = run(['uninstall', 'remove', '--apply', '--home', home]);
-  expectExit(r, 2, 'F5a 漂移时 remove 被拒');
+  expectExit(r, 2, 'F5a 漂移时 remove 被拒（删除前仍要确认）');
   expectText(r, '漂移', 'F5a');
   r = run(['check', '--home', home]);
-  expectExit(r, 1, 'F5b 漂移被 check 检出');
+  expectExit(r, 0, 'F5b 结构完好的漂移 = 合法演进 → check 通过（不再恒 exit 1）');
+  expectText(r, '待登记', 'F5b 以「待登记」如实提示');
+  // 结构损坏（截断到半个 frontmatter 之前）→ 真问题
+  fs.writeFileSync(path.join(home, 'skills/whale-notebook.md'), '---\nname: whale-notebook\ndescrip');
+  r = run(['check', '--home', home]);
+  expectExit(r, 1, 'F5b2 结构损坏(截断) → check exit 1');
+  expectText(r, '结构损坏', 'F5b2 明确报「结构损坏」');
+  // 恢复成"结构完好但内容变过"再 adopt
+  fs.writeFileSync(path.join(home, 'skills/whale-notebook.md'), SKILL_VALID + '\n- 合法更新\n');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F5b3 修好后 check 通过');
+  expectText(r, '待登记', 'F5b3 提示待登记');
+  r = run(['check', '--adopt', '--home', home]);
+  expectExit(r, 0, 'F5b4 check --adopt 重新登记');
+  r = run(['check', '--home', home]);
+  expectExit(r, 0, 'F5b4 adopt 后 check 通过');
+  ok(!r.text.includes('待登记'), 'F5b4 adopt 后无待登记项');
   // --yes 放行且快照留档
   r = run(['uninstall', 'remove', '--apply', '--yes', '--home', home]);
   expectExit(r, 0, 'F5c --yes 放行 remove');
@@ -239,7 +301,7 @@ function f5DriftGuard() {
     }
     return null;
   };
-  ok(bak('skill.bak') !== null && bak('skill.bak').includes('外部改动'), 'F5c 漂移后快照保留最新字节');
+  ok(bak('skill.bak') !== null && bak('skill.bak').includes('合法更新'), 'F5c 漂移后快照保留最新字节');
 }
 
 // ================= F6: R 段(运行时足迹) —— 登记/对账/摘除 =================
