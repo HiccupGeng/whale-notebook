@@ -172,11 +172,12 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | **0.7.7** | **扫描让出事件循环 + rebuild 维护窗口 + 漂移分级（lifecycle 0.2.0）**：① **`scanHistory`/`runScanInner` 改生成器 + 双驱动**，宿主 `runScanAsync` 在让出点 `await setImmediate`；让出粒度经**实测修正**为"大日志按 256KB 窗口续读"（第一版"每 8 文件/4MB"实测宿主仍卡 **3857ms** → 修正后**最大卡顿 69ms**）→ 点 ⟳ 触发全量扫描（52MB ≈6s）时面板/GUI/实时采集不再被独占；`/whale/live` 增 `scanJob`，卸载置取消位（一定释放写锁）② **`--rebuild` 开维护窗口**（`.maintenance.json` + TTL 兜底）：实时采集**让路但不丢事件**（缓冲 + 1s 重试 + `heldByMaintenance` 计数），`finally` 无条件关窗；`/whale/live` 增 `maintenance` ③ **漂移判定分级**：`lifecycle check` 只在缺失/结构损坏（截断/乱码/frontmatter 丢失/必需小节消失）/孤儿/清单待迁移时 exit 1，**「内容变了但结构完好」= 合法演进（「待登记」，exit 0）**，新增 `check --adopt` 重新登记基线；**AGENTS 迁到 `zones` 模式**（只管理两个标记区，区外是用户自己的内容，`remove` 只剥区不删整文件）——实测本机 `check` 由恒 exit 1 变为 exit 0，AGENTS.md 字节未变 | ✅ |
 | **0.7.8** | **待审箱两个新入口**：① 页脚**「自动收集」开关**（`自动入箱`｜`仅暂存`）= `settings.autoAdd`，新增 `GET/POST /whale/settings`：**只写 `settings.json`**（`readSettingsStrict` 严格读防"读-改-写吃掉用户其它设置" + 原子写 + `autoAdd` 键白名单），状态取自服务端而非 localStorage，**不写 AGENTS.md**（提醒句改"以 `--check` 输出为准"的双模式自述，注入永不撒谎）② 页头 **⛏「历史深掘」** = `POST /whale/sweep`：阶段① `--add` 保底（暂存先入箱，防重建清空丢件）→ 阶段② `--rebuild --add`（全量重扫全部历史直接入箱；已处置不复活、在箱候选只累加不重复开行、编号下限取 max(在箱,归档)+1；单轮开行上限 30→**500** 并显式报 `dropped`）；与 `/whale/scan` 共用互斥位、复用让出事件循环与维护窗口、`scanJob.kind='sweep'` 带阶段进度、`{dry:true}` 只读预演；完成后**自动开一个新会话**做「历史错误总结/同族合并建议/入库草案」（落点＝鲸鱼全局，开局消息含扫描统计+清单 ≤20 条+只读约束；无新发现且待审为空则不开，不花 token）③ **面板记忆 pin**：主动开过面板后待审为 0 也保留入口（否则"待审=0 且要切开关"时够不着） | ✅ 当前（宿主半边待重启） |
 
-- **待生效提醒（v0.7.9 实测修正）**：宿主半边（实时采集、`POST /whale/scan`、`GET /whale/live`、`GET /whale/related`、`GET/POST /whale/settings`、`POST /whale/sweep`）与浏览器半边**要分开看**——
-  - **宿主半边：本机实测"部署后立即生效"，不必重启**。判据：`deploy-web --apply` 后**不重启**直接 `GET /whale/live` 返回 `version` 与 `live.enabled:true`，`/whale/inbox` 返回 `pending`（即加载器行会被运行中的实例重新解析）。
-  - **浏览器半边（`lib/client.js` 的面板 UI）：需重启 dsh**——client bundle 的加载图在启动时算定，无法热加载（实测 bundle 路由 404）。
-  - 副本是否最新一律以 `deploy-web --check` 的字节对账为准（权威源已 0.7.8）。`mine.cjs` 增量批扫与 `lifecycle/` 不依赖重启（`--forget-echo`、回声签名与幂等落档、`check --adopt` 与漂移分级在**批扫侧/命令侧立即生效**）。
-- **顺序铁律（v0.7.4 补记，仍然成立）**：改动必须**先 `deploy-web --apply` 再重启 dsh**；反序等于重启加载的仍是旧副本（曾实测 `/whale/live` 仍自报旧版本）。
+- **待生效提醒（v0.7.9 实测更正，含一次自我纠错）**：宿主半边与浏览器半边**都需重启 dsh**——
+  - **宿主半边（`lib/index.js`/`src/**`：实时采集、`/whale/*` 端点）需重启**。判据（2026-10-01 直接实测）：把权威源与部署副本升到 0.7.9 并 `--apply` 后，**不重启**请求 `GET /whale/live` 仍报 `version: 0.7.8` —— 运行中的实例**不会**重新加载已加载模块的代码，也不重新解析加载器行。
+    > ⚠️ 曾一度把结论写成"宿主部署后即生效、只有 UI 需重启"。那是**观测 confound**：当时是"先部署 → 用户重启 → 才测端点"，端点活着来自那次重启，不是热加载。上面这条才是干净的对照（部署后不重启，版本号停在旧值）。
+  - **浏览器半边（`lib/client.js` 面板 UI）也需重启**且原因不同：client bundle 的加载图在启动时算定，无法热加载（实测 bundle 路由 404）。
+  - 副本是否最新一律以 `deploy-web --check` 的字节对账为准（**注意：对账通过 ≠ 已生效**，重启前 `/whale/live` 的 `version` 才是"运行中实际是哪一版"的判据）。`mine.cjs` 增量批扫与 `lifecycle/` 不依赖重启（`--forget-echo`、回声签名与幂等落档、`check --adopt` 与漂移分级在**批扫侧/命令侧立即生效**）。
+- **顺序铁律（v0.7.4 补记，v0.7.9 复核成立）**：改动必须**先 `deploy-web --apply` 再重启 dsh**；反序等于重启加载的仍是旧副本（曾实测 `/whale/live` 仍自报旧版本）。
 - **回声过滤补漏（v0.7.1／v0.7.2）**：v0.5 的 `isMetaEcho` 只挡「助手叙述 / 探针输出」类回声；**工具结果里对历史日志、sidecar、`state.json` 的转储与 notebook 自渲染行**（例：诊断脚本打印的 `==== L### <kind>` 信封、`| C### | … |` 候选行）不含既有强特征，会被当成新事件开行——实测同一物理事件在复盘会话里被重新开行为候选。v0.7.1 新增单条命中即判的 `META_DUMP` 三类签名（会话日志转储信封 / 会话记录 JSON 信封 / notebook 表行），**只认渲染痕迹、不认失败语义**，故同一失败原文照收；`live.selftest` +4 断言（含「不误伤原文」反证）。**v0.7.2 修正**：表行判据原带 `^` 行首锚，而成功路径会把输出压成单行（`raw.replace(/\s+/g, ' ')`），带锚永远匹配不到——实测「打印 echo 归档行」的命令输出照样进暂存；现改为不锚定，并要求时间戳行后随类别词，免得误伤普通表格（自测 +2，含反证）。宿主半边需重启 dsh web 生效。
 - **回声自我放大治理（v0.7.6）**：前几轮补签名的做法**治标**——实测仍有两类漏网：① 「我们自己的产物」形态（我们 API 的 JSON 信封 `{"ok":true,…"candidate"…}`、`state.json` 的字段名 `"reAddedAt"`、一次性探针的抬头 `topKeys=` / `parts=7 [` / `== clusters sample` / `=== lifecycle/selftest.cjs ===`）② 更根本的是**分组方式**：回声原来按「聚簇哈希 = cat|tool|整段文本」聚合，同一现象第二次被打印时尾部（打印出来的表行、行号、上下文）已变 → 哈希不同 → **新开一行**而不是累加，于是 `archive/echo-*.md` 单调增长（实测 231 行只对应 77 个不同现象，55 个现象有多行、单现象最多 8 行；同一批污染还漏进了候选池：18 组暂存里 13 组 = 72%）。v0.7.6 三层一起改：**签名化**（`类别|一句话现象(≤90字)`，与归档列同口径）+ **幂等落档**（当日已有同签名就不写）+ **补签名 `META_ARTIFACT`**（state 字段名/探针抬头/表头，单条即判，配 5 条真实故障反证）+ **按出处整类拦截**（命令碰过数据产物且结果是渲染输出；只碰源码的开发调试不算）。数据修复：`mine.cjs --forget-echo --apply` 实测清掉 13 组、保留 5 组真实发现。自测 +18 断言（含「同一现象重复打印归档不增长」「幂等可见于 CLI 文本」「出处判定的两条反证」）。**批扫侧立即生效，宿主侧需重启。**
 - **未来**：会话平面挂载（工具/事件）；B2 项目级自动注入（项目根 AGENTS.md，逐项目知情试点）；复发检测深化（二期）；面板增强（桌宠形态/事件推送，契约已备）。
@@ -211,7 +212,8 @@ node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周�
 node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check[ --adopt]|install|uninstall detach|remove|purge …
                                                                    # 生命周期工具(v0.2.0: R 段真登记/对账, detach 驱动 deploy-web; check 漂移分级)
 node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--check|--undo] [--profile <name>]
-                                                                   # R 段唯一写入者(改后需重启 dsh 才加载面板 UI；宿主端点实测部署后即生效)
+                                                                   # R 段唯一写入者(改后必须重启 dsh 才生效: 宿主端点与面板 UI 都不热加载;
+                                                                   #   对账通过≠已生效, 重启前看 /whale/live 的 version)
                                                                    # v0.7.9: 目标 profile 可配置(--profile > DSH_PROFILE > 默认 web);
                                                                    #   profile 不存在→exit 1 并列出可用项; 部署成功记录到 .lifecycle/runtime-profile.json
 node ~/.dsh/whale-notebook/plugin/src/ui/server.selftest.cjs       # 面板 host 逻辑沙盒自测(82 PASS, 含 v0.7.5 端点闸门 + v0.7.8 自动收集开关写路径纪律)
