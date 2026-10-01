@@ -3,7 +3,7 @@
 > **把 DSH 会话里踩过的坑，变成下一个会话不会再踩的规则。**
 > DeepSeek Harness 的自我进化机制：挖掘本机全部会话里反复出现的问题 → 提炼成候选经验 → **经你逐条确认**后写入全局经验库 → 注入 `~/.dsh/AGENTS.md` 自动段（每个新会话自动生效）。
 
-**当前版本 `0.7.8`** ｜ 全部自检 **486 断言全绿**（16 个测试文件 PASS 累计 609） ｜ 用户记忆数据**只在本机、永不入库**
+**当前版本 `0.7.9`** ｜ 全部自检 **626 断言全绿**（16 个测试文件） ｜ 用户记忆数据**只在本机、永不入库**
 
 ---
 
@@ -82,8 +82,8 @@ node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --appl
 ## 验证
 
 ```powershell
-node plugin/lifecycle/selftest.cjs                    # 120 PASS · 含"不碰真实部署"反证
-node plugin/src/ui/server.selftest.cjs                # 81 PASS · 面板 host 逻辑（含自动收集开关写路径纪律）
+node plugin/lifecycle/selftest.cjs                    # 137 PASS · 含 desktop profile 端到端 + "不碰真实部署"反证
+node plugin/src/ui/server.selftest.cjs                # 82 PASS · 面板 host 逻辑（含自动收集开关写路径纪律）
 node plugin/src/core/privacy.selftest.cjs             # 23 PASS · 打码出口
 node plugin/src/core/summarize.selftest.cjs           # 10 PASS · 现象一句话
 node plugin/src/core/similarity.selftest.cjs          # 20 PASS · 同族判定（含「不得误并」反证）
@@ -97,12 +97,13 @@ node plugin/scripts/panel-actions.selftest.cjs        # 30 PASS · 面板两个�
 node scripts/redact.test.cjs                          # 22 PASS · 打码回归（含 Bearer/Cookie/URL 凭据/密钥名）
 ```
 
-合计 **10 套自检 386 断言** + bundle 桩 + 22 打码断言 + 43 死链体检断言 + 28 讨论落点断言 ＝ 13 个测试文件 PASS 累计 **457**（最近全绿：2026-09-11）。所有自检都在临时沙盒里跑，**不触碰真实 `~/.dsh`**。
+合计 **15 套自检 626 断言 / 0 FAIL** + bundle 桩 ＝ 16 个测试文件（最近全绿：2026-10-01）。所有自检都在临时沙盒里跑，**不触碰真实 `~/.dsh`**。
 
 ## 版本沿革（明细见 `CHANGELOG.md`）
 
 | 版本 | 一句话 |
 |---|---|
+| `0.7.9` | **面板部署支持 desktop profile**：目标 profile 可配置（`--profile <name>` > `DSH_PROFILE` > 默认 `web`）；**Windows 桌面版跑 `desktop`**，此前写死 `profiles/web` 会"部署成功但面板永不出现"（静默失效）→ 现改为 profile 不存在即明确报错并列出可用项，生效 profile 记入 `.lifecycle/runtime-profile.json` 供生命周期对账/卸载。**同步流程补 `skills/`**（该文件此前从不进仓库，导致新机器 `install` 卡死）+ `mirrorDocs` 三条完整性护栏（空源/源不全一律报错中止，不再静默删）。文档口径修正：宿主端点部署后即生效，**只有面板 UI 需重启 dsh** |
 | `0.7.8` | **待审箱两个新入口**：① 页脚**「自动收集」开关**（`自动入箱`｜`仅暂存` = `settings.autoAdd`，新增 `GET/POST /whale/settings`；**只写 `settings.json`**、严格读防"读-改-写吃掉其它设置"、原子写、键白名单，**不写 AGENTS.md**——提醒句改成"以 `--check` 输出为准"的双模式自述）② 页头 **⛏「历史深掘」**（`POST /whale/sweep` = `--add` 保底 + `--rebuild --add` 全量重扫全部历史直接入箱；已处置不复活、在箱候选只累加不重复开行；单轮开行上限 30→**500** 并显式报 `dropped`；完成后**自动开一个新会话**做历史错误总结/同族合并建议/入库草案）③ **面板记忆 pin**（主动开过面板后待审为 0 也保留入口，否则开关够不着） |
 | `0.7.5` | **端点闸门**（8 个 `/whale/*` 统一校验 Host 回环 / Origin / `Sec-Fetch-Site` / 写操作必须 JSON → 跨站副作用与 DNS rebinding 读数据均被拒）· **采集健康度可观测**（zstd 能力探测、帧扫描边界检查、中段坏帧分类与 `badRounds`/`stuckFiles`、`/whale/live` 新增 `zstd`/`scan`/`diag`） |
 | `0.7.6` | **回声自我放大治理**（回声落档改「稳定签名 + 幂等追加」，签名 = `类别\|一句话(≤90字)`；补 `META_ARTIFACT` 产物标识签名与「按出处整类拦截」；当日分片超 400 行自动轮转）· **暂存污染清理** `mine.cjs --forget-echo [--apply]`（实测 18 组里 13 组＝72% 是自引用输出，清理后剩 5 组真实发现）· **双计口径加固**（实测 live 与批扫指纹逐字节一致、无双计；改为把 `toolUnknown`/`skippedByFingerprint` 与不变量断言钉住结论） |

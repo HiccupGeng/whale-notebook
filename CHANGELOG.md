@@ -1,7 +1,75 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.8`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.9`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+
+## v0.7.9（2026-10-01）面板部署支持 desktop profile · 同步流程补 skills/ 与两处护栏
+
+**起因**：项目在另一台机器（Web 形态）告一段落后，本机（**Windows 桌面版**）重新拉取代码并继续开发。装到「部署面板」这一步时发现：本机跑的是 **`desktop` profile**，而 `deploy-web.cjs` **写死 `profiles/web`** —— 在桌面版上部署会"成功"写进一个**没人启动的 profile**，面板永远不出现，而所有自检都通过（**静默失效**）。
+
+### ① 部署目标 profile 可配置（`scripts/deploy-web.cjs` + `lifecycle/` + `manifest.json`）
+
+**DSH 的 profile 模型**：`dsh --profile <name>` 选择一叠 bundle 栈，同机可并存多个。桌面版（`DeepSeek Harness.exe` → `dsh-desktop-host`）跑 **desktop**；纯 Web 服务形态才是 **web**（`dsh web`）。两个 profile 的 `dsh.profile.bundles` 逐字相同（都是 `dsh-base` + `dsh-web-app`），模块 hoisted 在共享的 `profiles/node_modules` —— 所以面板本身在桌面版上完全可用，**只是部署打错了地方**。
+
+- `scripts/deploy-web.cjs`：目标 profile 解析顺序 `--profile <name>` > `DSH_PROFILE` > 默认 `web`（向后兼容）；
+  **目标 profile 不存在时明确报错并列出可用 profile（exit 1）** —— 把静默失效变成显式错误；
+  部署成功后把生效 profile 记入 `.lifecycle/runtime-profile.json`。
+- `lifecycle/consts.cjs`：新增 `{profile}` 路径模板变量 + `readRuntimeProfile(home)`（无记录回退 `web`）。
+- `lifecycle/manifest.cjs`：`ctxOf` 带上 profile；`mergedView` 按当前 ctx **重解析派生路径**。
+- `lifecycle/cli.cjs`：`ensureSiteEntries` 刷新**已存在条目**的 path；`detach` 把记录的 profile 经
+  `DSH_PROFILE` 传给唯一写入者（否则桌面版会被当成 web 卸载，挂载行与副本原地留成孤儿）。
+- `manifest.json`：R 段路径 → `{dshHome}/profiles/{profile}/...`。
+
+**实测发现并修掉一个隐藏 bug**：站点清单的 R 段路径原先**只在首次 `install` 时解析一次、之后永不刷新**。
+路径动态化后，这会造成"现场明明部署了却登记 absent"（本机复现：装了 desktop 却仍探测 web）。
+根因是 `ensureSiteEntries` 对已存在条目直接 `continue`；改动后 path 作为派生数据始终以模板为准。
+
+**意外的好处**：`DSH_PROFILE` 是 **DSH 自己注入会话环境的变量**，所以在 DSH 会话里直接跑部署脚本会**自动命中当前活跃 profile**，不需要记忆参数。
+
+**验证（本机实测）**：默认→desktop、`--profile desktop`→desktop、`--profile nosuchprofile`→exit 1 并列出 `desktop, web`、
+`--profile` 缺参数→exit 2；部署后 `desktop/cordis.patch.yml` 46 → 52 行且用户配置（`defaultPreset`/`model`/`reasoningEffort`/`ui-chat`）
+**逐项验证未被触碰**；`lifecycle check` 自动切到 desktop 对账并全绿。
+
+### ② `skills/` 纳入发布同步（`tools/sync-release.cjs`）
+
+**问题（新机实测踩到）**：`install` 把 L2 技能 `~/.dsh/skills/whale-notebook.md` 当作**必需前置**（缺失即 exit 2 拒绝安装），
+而 `sync-release.cjs` 的权威源列表里**没有 `skills/`** —— 该文件只存在于开发机，从未进过仓库。
+后果：新机器上 `install` 直接卡死（本次实测复现），且**没有任何文档提示这一点**。
+
+- `tools/sync-release.cjs`：新增 `mirrorSkills`（`~/.dsh/skills/<name>` → 库根 `skills/<name>`）。
+  用**显式文件名单**（`SKILLS = ['whale-notebook.md']`）而非整目录镜像 —— 权威源是**用户目录**，
+  里面还有用户自己的技能与 `dot-skill/` 这类目录，整目录镜像会把无关内容批量灌进公开仓库。
+- 新增前置守卫：技能文件缺失时**报错拒绝执行**（而不是 warn 跳过）—— 静默跳过会把"新机装不上"的坑留到下次，
+  且本次同步看起来还是成功的。
+
+### ③ `mirrorDocs` 完整性护栏（真实事故换来的）
+
+**事故**：`mirrorDocs` 是**破坏性镜像**（先删光仓库 `docs/` 里所有 `whale-notebook*.md`，再从权威源整拷）。
+而权威源 `<工作区>\docs\` 当时**只有 1 份新文档**（其余 14 份历史设计文档只存在于仓库 `docs/`）——
+一次同步把仓库里那 14 份**全删了**。已从 git 完整恢复（`git diff` 无差异），并把它们补进了权威源。
+
+**护栏（三条，均已用临时目录反证）**：
+1. 源目录里**一份都没有** → 拒绝执行（空源清空目标几乎不可能是本意）；
+2. 目标有、源没有的文件 → **报错列出并中止**，不再静默删（由人决定"补进权威源"还是"确实要删"）；
+3. 源完整 → 正常镜像通过。
+
+**顺带修掉的文档口径**：`PROJECT-INTRO.md` 与 `plugin/README.md` 现在写明**同步方向**（权威源 → 仓库，仓库 `docs/` 是镜像产物、
+新文档要写进权威源），并把"宿主半边改动需重启 dsh"细化为实测结论：**宿主半边部署后即生效**（`/whale/live` 不重启就报新版本），
+**只有浏览器半边（面板 UI）需要重启** —— client bundle 的加载图在启动时算定，无法热加载。
+
+### 验证
+
+- **`lifecycle/selftest` 120 → 137（+17）**：原 2 条路径断言改为 `{profile}` 模板断言 + 解析结果断言（web/desktop 双向）；
+  新增 **F6l desktop 端到端 15 条** —— 独立 home 造 desktop 现场，覆盖"无记录回退 web"与"记录 desktop 后认到现场"的**对照**、
+  `check` 按 desktop 对账、`detach` 摘除打在 desktop 且用户自己的 patch 行原样保留。
+- **全量：626 PASS / 0 FAIL**（15 套件 + bundle-smoke 结构桩，16 个测试文件）。
+- **本机安装端到端实测**：`install --apply --agents-mode zones`（exit 0、`AGENTS zones 标记区齐备, 零改动`）→
+  `deploy-web --apply`（46 文件 → `profiles/desktop/`，patch 尾部追加，自检"与权威源逐字节一致"通过）→
+  `mine.cjs --check` **新发现 7 条**（3 日志 1.46MB，172ms，0 token）→ 6 个 GET 端点 + 写端点全 200 →
+  端点闸门四项实测 403/403/403/415 → 三方（仓库/权威源/部署副本）逐字节一致。
+
+**生效**：`deploy-web` 的 profile 解析与 `lifecycle` 的路径对账属**批扫侧/命令侧，立即可用**；
+面板 UI（`lib/client.js`）需重启 dsh 后加载。
 
 ## v0.7.8（2026-09-12）待审箱两个新入口：自动收集开关 · 历史深掘
 

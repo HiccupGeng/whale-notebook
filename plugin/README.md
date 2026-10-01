@@ -1,4 +1,4 @@
-# dsh-whale-notebook 插件包（v0.7.8：待审箱两个新入口——页脚「自动收集」开关（`settings.autoAdd`，只写 settings.json）＋页头 ⛏「历史深掘」（`POST /whale/sweep` = `--add` 保底 + `--rebuild --add` 全量重扫历史直接入箱 + 自动开总结会话）· 扫描让出事件循环 · rebuild 维护窗口 · 漂移分级与 check --adopt（lifecycle 0.2.0）· 回声自我放大治理 · 暂存污染清理 · 双计口径加固 · 端点闸门 · 采集健康度可观测 · 打码补漏 · 状态文件完整性 · 归档签名修正 · 讨论落点路由 · 类别展示契约 · CLI 退出码 · 同族确定化 · 决策箱双卡 = 待审箱 + 已解决墙）
+# dsh-whale-notebook 插件包（v0.7.9：**面板部署目标 profile 可配置**（`--profile` > `DSH_PROFILE` > 默认 `web`；桌面版跑 `desktop` profile，此前写死 `profiles/web` 会在桌面版上"部署成功但面板永不出现"）+ 目标 profile 不存在时明确报错 + 生效 profile 记入 `.lifecycle/runtime-profile.json` 供生命周期对账/卸载 · ｜ v0.7.8：待审箱两个新入口——页脚「自动收集」开关（`settings.autoAdd`，只写 settings.json）＋页头 ⛏「历史深掘」（`POST /whale/sweep` = `--add` 保底 + `--rebuild --add` 全量重扫历史直接入箱 + 自动开总结会话）· 扫描让出事件循环 · rebuild 维护窗口 · 漂移分级与 check --adopt（lifecycle 0.2.0）· 回声自我放大治理 · 暂存污染清理 · 双计口径加固 · 端点闸门 · 采集健康度可观测 · 打码补漏 · 状态文件完整性 · 归档签名修正 · 讨论落点路由 · 类别展示契约 · CLI 退出码 · 同族确定化 · 决策箱双卡 = 待审箱 + 已解决墙）
 
 鲸鱼小本本从「skill + 脚本」升级为**模块化插件包**：分模块对应未来功能（核心/记录/生效/审核/展示），任何一块都可独立演进。v2.0 只做结构与契约（零挂载风险，现有 skill+AGENTS+脚本继续可用）；v2.1 起做真实 cordis 挂载（决策箱面板 = host half API + browser half 悬浮 UI，`scripts/deploy-web.cjs` 一键部署）。v0.3.0：现象一行一句话、候选详情 sidecar、删除改红色 ✕、自动处理判定表硬规则 + `[WHALE-RISK]` 重大隐患上报与红色警示条。v0.4.0：已解决墙（A1 文档墙 INDEX.md + A2 面板「已解决」卡）＋全局/项目两级分类（entry scope/projects）＋B1（项目级规则不进全局自动段）。**v0.5.0：增量采集（水位线只解新增帧，热启动 11ms）＋运行中实时入箱（宿主 `session/event`）＋聚簇索引（同坑累加次数、已处置复发重开并标注）＋`--dry`/`--full`/只读 `--stats`**。**v0.5.1：自引用/探针回声过滤（两级签名，对 error 类同样生效）——真实历史预演从 26 条噪声候选降到 2 条真坑**。**v0.6.0：拉取式采集——`settings.autoAdd=false` 时扫描照常（增量、0 token）但新发现只暂存 `state.deferred`，**不自动写入待审箱**；用户说「小本本复盘」时 `mine.cjs --add` 一次性冲入待审箱**。**v0.6.1：`--rebuild` 清派生状态后从头梳理全部历史（`--rebuild --add` 一条命令扫完入箱）**。**v0.6.2：回声签名扩充 + 类别正则收紧（真实历史从零重扫候选 36 → 26，且无类别误判）**。**v0.6.3：已处置签名去重——把归档表当事实源，修掉「state 重置/重扫后同一个坑重复开行」（同一行曾先后开出 3 个编号）**。**v0.7.0：同族（family）确定化——`src/core/similarity.cjs` + L1 族合并 + `GET /whale/related` + 面板「族×N」，让「还有类似的问题可以一并处理」由程序算出、可复现可解释，而不是模型即兴归纳**。**v0.7.1：回声过滤补漏——工具结果里对历史日志/sidecar/`state.json` 的转储与 notebook 自渲染行（转储信封 `==== L### <kind>`、候选行 `| C### | … |`）不再被当成新事件开行（此前同一物理事件在复盘会话里被重新开行）；`META_DUMP` 只认渲染痕迹、不认失败语义，故同一失败原文照收**。**v0.7.1 另修 `deploy-web --check`：补与权威源逐文件字节对账，副本陈旧即 exit 1（此前只核结构，实测出现「check 通过但副本仍是 0.7.0、重启后没生效」）。**v0.7.2：修正回声表行判据的行首锚——成功路径会先把输出压成单行（`raw.replace(/\s+/g, ' ')`），带 `^` 则永远匹配不到（实测「打印 echo 归档行」的命令输出照样进暂存）；三条表行判据改为不锚定，并要求时间戳行后随类别词，免得误伤普通表格。** **v0.7.3：讨论落点路由（💬 按候选来源选落点——跨项目 → 固定「鲸鱼全局」工作区；单项目 → 该项目工作区；未知/歧义 → 回退当前并在 toast 说明依据；页脚三态开关 + `localStorage` 记忆；落点与依据写进新会话开局消息）＋ `/whale/inbox` 归档列修复（行尾 `|` 不再被续写成空列）＋ 类别展示契约（补 `error` 标题；把标题兜底与排序秩收成 `schema.cjs` 一处并导出，文档墙与面板分组排序由此一致、未登记类别两侧都排末尾）＋ CLI 退出码（0 成功 / 2 前置缺失 / 1 失败，唯一进程级出口放在薄壳，`cli.run()`/`engine.runScan()` 保持纯函数）＋ 面板样式节点纳入 disposer（谁创建谁回收）。**
 
@@ -18,9 +18,9 @@ plugin/
 │  ├─ zones.cjs            # AGENTS 标记区几何操作(纯文本; 亦用于 R 段 patch 标记区对账)
 │  ├─ manifest.cjs         # 站点清单 .lifecycle/manifest.json 存取/合并/迁移/快照
 │  ├─ fsx.cjs              # 原子写/哈希/树复制删除(字节安全)
-│  └─ selftest.cjs         # 沙盒端到端自测(临时 home, 104 PASS: 含 R 段与"不碰真实部署"反证)
+│  └─ selftest.cjs         # 沙盒端到端自测(临时 home, 137 PASS: 含 R 段/漂移分级/desktop profile 端到端/"不碰真实部署"反证)
 ├─ scripts/
-│  ├─ deploy-web.cjs       # ★部署工具: 复制包 + patch web profile(幂等; dry/apply/undo/check)
+│  ├─ deploy-web.cjs       # ★部署工具: 复制包 + patch 目标 profile(幂等; dry/apply/undo/check; v0.7.9 目标 profile 可配置)
 │  ├─ links-doctor.cjs     # ★维护工具: 工具主目录悬空链接(junction/死链)体检/清理(dry 默认只读, --apply 才删; 退出码 0/3/1)
 │  ├─ links-doctor.selftest.cjs # 43 断言(临时夹具+真 junction: 只读/根外拒删/目标已修复不删/幂等, 含反证)
 │  ├─ discuss-route.selftest.cjs # 28 断言(讨论落点路由判定表; v0.7.3)
@@ -94,14 +94,21 @@ plugin/
 
 ```powershell
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs"            # dry-run
-node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --apply    # 复制包 + patch ~/.dsh/profiles/web/cordis.patch.yml
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --apply    # 复制包 + patch ~/.dsh/profiles/{profile}/cordis.patch.yml
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --check    # 自检（v0.7.1 起含与权威源逐文件字节对账：副本陈旧 exit 1）
 node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --undo --apply [--yes]  # 回退
+node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --profile desktop --apply  # v0.7.9 指定目标 profile
 ```
+
+**目标 profile（v0.7.9）**：`{profile}` 解析顺序 = `--profile <name>` > 环境变量 `DSH_PROFILE` > 默认 `web`。
+- **Windows 桌面版跑 `desktop`**（`DeepSeek Harness.exe` → `dsh-desktop-host`），纯 Web 服务形态才是 `web`（`dsh web`）。
+- **DSH 自身会注入 `DSH_PROFILE`**，所以在 DSH 会话里直接跑脚本会自动命中当前活跃 profile，不需要记参数。
+- **profile 不存在时明确报错并列出可用 profile**（exit 1）——把"部署到一个不会启动的 profile"这种静默失效变成显式错误。
+- 部署成功后把生效 profile 记入 `~/.dsh/whale-notebook/.lifecycle/runtime-profile.json`；lifecycle 读它来对账与 `uninstall detach`，保证卸载打在**同一个** profile 上。
 
 - **生效差异（v0.5 起）**：浏览器半边 `lib/client.js` 改动**只需刷新页面**（loader 每请求现读磁盘 + `no-cache`）；宿主半边 `lib/index.js`/`src/**` 改动（实时采集、新端点如 `/whale/related`）**需重启 dsh web**（会中断在线会话，时机由用户定）；`mine.cjs` 增量批扫不依赖重启，立即可用。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可；**重装会换掉旧 junction 指向的包缓存 → 留下悬空链接（死链）：它会让 ripgrep 搜索模式 exit 2、整次检索结果被丢弃（经验条目 E005）**。体检/清理用 `node scripts/links-doctor.cjs`（默认只读，exit 3 = 发现悬空）/ `--apply`（逐条复验后只摘链接本身）。
-- 验证（2026-09-12 实测全绿，v0.7.8）：`node src/ui/server.selftest.cjs`(82，v0.7.8 +19 自动收集开关) + `src/core/privacy.selftest.cjs`(23) + `src/core/summarize.selftest.cjs`(10) + `src/core/similarity.selftest.cjs`(20) + `src/store/repo.selftest.cjs`(34) + `src/collector/engine.selftest.cjs`(38，v0.7.8 +3 maxNewRows) + `src/collector/engine.dedup.selftest.cjs`(24) + `src/collector/e2e.selftest.cjs`(67) + `src/collector/live.selftest.cjs`(48) + `src/collector/sweep.selftest.cjs`(20，v0.7.8 新增：深掘全链) + `lifecycle/selftest.cjs`(120) = **11 套件 486 断言** + `node scripts/bundle-smoke.cjs`（bundle 桩）+ `scripts/redact.test.cjs`(22 断言) + `scripts/links-doctor.selftest.cjs`(43 断言) + `scripts/discuss-route.selftest.cjs`(28) + `scripts/panel-actions.selftest.cjs`(30，v0.7.8 新增)，全绿（16 个测试文件 PASS 累计 609）。
+- 验证（2026-10-01 实测全绿，v0.7.9）：`node src/ui/server.selftest.cjs`(82，v0.7.8 +19 自动收集开关) + `src/core/privacy.selftest.cjs`(23) + `src/core/summarize.selftest.cjs`(10) + `src/core/similarity.selftest.cjs`(20) + `src/store/repo.selftest.cjs`(34) + `src/collector/engine.selftest.cjs`(38，v0.7.8 +3 maxNewRows) + `src/collector/engine.dedup.selftest.cjs`(24) + `src/collector/e2e.selftest.cjs`(67) + `src/collector/live.selftest.cjs`(48) + `src/collector/sweep.selftest.cjs`(20，v0.7.8 新增：深掘全链) + `lifecycle/selftest.cjs`(**137**，v0.7.9：+F6l desktop 端到端 15 条、更新 2 条路径断言) = **626 断言 / 0 FAIL** + `node scripts/bundle-smoke.cjs`（bundle 桩）+ `scripts/redact.test.cjs`(22 断言) + `scripts/links-doctor.selftest.cjs`(43 断言) + `scripts/discuss-route.selftest.cjs`(28) + `scripts/panel-actions.selftest.cjs`(30)，全绿（16 个测试文件）。
 
 ### 风险与前提（务必先读）
 
@@ -129,7 +136,7 @@ node lifecycle/cli.cjs uninstall detach       # 仅 R 段(驱动 deploy-web --un
 3. **前像快照**：凡改写/删除外部目标先字节级快照至 `.lifecycle/backups/<时间戳>/<id>.bak`；remove 后重装自动从备份还原字节（round-trip 等价）。
 4. **AGENTS 两种归属模式**：`whole`(默认, 整文件归插件, remove 整文件删) / `zones`(install --agents-mode zones: 只管理两个标记区: rules+privacy, 区外用户内容永不动)。隐私尾注(原无标记)在 whole/zones 安装时都会纳入 `<!-- whale-notebook:privacy -->` 标记区——设计文档 §5.4「痕迹必须可指认」的落地。
 5. **漂移守卫**：登记后文件被外部改动, remove 会中止并提示加 `--yes`（仍先快照留档）。
-6. **R 段(运行时)**: 清单如实登记真实部署位(`profiles/web/node_modules/…` + `profiles/web/cordis.patch.yml` 的标记区, `managedBy: scripts/deploy-web.cjs`)。lifecycle 只**登记/对账/快照/驱动**, 写入与删除一律交唯一写入者 `deploy-web.cjs`(幂等, 自带 `--check`/`--undo`); R 段对账是**信息级**, 不左右 `check` 退出码(没部署 ≠ 装坏了)。清单版本迁移(条目改名/新增)由 `install --apply` 自动完成, `check` 会以「待迁移」提示。
+6. **R 段(运行时)**: 清单如实登记真实部署位(`profiles/{profile}/node_modules/…` + `profiles/{profile}/cordis.patch.yml` 的标记区, `managedBy: scripts/deploy-web.cjs`; `{profile}` 由 `.lifecycle/runtime-profile.json` 解析, 默认 `web`)。lifecycle 只**登记/对账/快照/驱动**, 写入与删除一律交唯一写入者 `deploy-web.cjs`(幂等, 自带 `--check`/`--undo`; `detach` 会把记录的 profile 通过 `DSH_PROFILE` 传给该工具, 避免卸载打在错的 profile 上); R 段对账是**信息级**, 不左右 `check` 退出码(没部署 ≠ 装坏了)。清单版本迁移(条目改名/新增)由 `install --apply` 自动完成, `check` 会以「待迁移」提示。
 7. **`remove` 后 `.lifecycle` 保留**（在 D 内）——与设计稿「清单随最后一级卸载删除」的裁定：remove 不清 D，.lifecycle 是重装/恢复依据；**purge 随 D 一起物理消失**, 无任何残留（含清单自身）。
 8. **成果确认约定**：卸载计划先输出成果文件清单（待审候选/经验条目/归档计数 + 逐项去留），AI 删除前必须经用户确认；purge 前置导出（`--export-dir`）与二次确认（`--yes`）。
 9. **已验证**（2026-09-09 本机真实演练 + 沙盒自测）：remove → 残留核对 → 重装字节等价还原（hash 一致）；中途 AGENTS 注入/skill 目录的移除与恢复均由 DSH 原生机制即时反映。2026-09-10 补 R 段覆盖 → **104 PASS / 0 FAIL**，含反证「R 段测试全程不碰真实 home 的 `cordis.patch.yml`（`DSH_HOME` 覆盖生效）」。本机真实安装已用 `install --apply` 完成清单迁移与重新登记，`check` 全绿（对账 R 段 2 条）。
