@@ -4,6 +4,7 @@
 // 自举约束: 仅 node 内建; 从任意位置 node <pkg>/lifecycle/cli.cjs 均可运行。
 // 所有写操作两段式: 默认 dry-run 出计划(展示给用户) → 确认后 --apply。
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const C = require('./consts.cjs');
@@ -71,7 +72,7 @@ function structureProblems(id, raw, ctx) {
 
 // ---------------- 参数解析 ----------------
 function parseArgv(argv) {
-  const flags = { apply: false, agentsMode: null, seedDir: null, exportDir: null, yes: false, home: null, adopt: false };
+  const flags = { apply: false, agentsMode: null, seedDir: null, exportDir: null, yes: false, home: null, adopt: false, seedFromRepo: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -80,6 +81,8 @@ function parseArgv(argv) {
     else if (a === '--adopt') flags.adopt = true; // v0.7.8：check --adopt 重新登记 I 段基线
     else if (a === '--agents-mode') flags.agentsMode = argv[++i] || null;
     else if (a === '--seed-dir') flags.seedDir = argv[++i] ? path.resolve(argv[i]) : null;
+    // v0.7.9：从仓库自带素材安装（新机友好）—— 见 seedFromRepoIfAsked
+    else if (a === '--seed-from-repo') flags.seedFromRepo = true;
     else if (a === '--export-dir') flags.exportDir = argv[++i] ? path.resolve(argv[i]) : null;
     else if (a === '--home') flags.home = path.resolve(argv[++i] || '');
     else rest.push(a);
@@ -503,7 +506,44 @@ function planInstall(home, flags) {
   return { def, site, mode, steps, notes, blockers, ctx, agentsPath, skillPath, agentsText, rules, privacy };
 }
 
+// v0.7.9：从**仓库自带素材**补 I 段所需的 skill（`--seed-from-repo`）。
+// 起因（新机安装实测）：`install` 把 L2 技能当作必需前置（缺失即 exit 2），而 cli.cjs 位于
+//   `<repo>\plugin\lifecycle\`，仓库根本来就带 `skills/whale-notebook.md` —— 却要求用户先手工
+//   把它复制到 `<dshHome>/skills/`。README 的快速开始也没写这一步 → 照文档走必然卡住（半成品感）。
+//   DSH 的 skill 是**热加载**的（`<dshHome>/skills/` 下出现文件即注册），所以放置后无需重启。
+// 纪律：尊重两段式 —— dry-run 只报告"将复制"，不落盘；--apply 才真复制。
+//   因此 dry-run 的计划里这一条会以"skill 缺失 → 从仓库素材复制"呈现（走既有 seedSkill 分支）。
+// 仓库根 = cli.cjs 的上两级（`<repo>\plugin\lifecycle` → `<repo>`）；仓库里没有就明说，不静默。
+function repoSkillPath() {
+  return path.join(path.resolve(__dirname, '..', '..'), 'skills', C.SKILL_FILE);
+}
+function seedFromRepoIfAsked(home, flags) {
+  if (!flags.seedFromRepo) return;
+  const dst = path.join(home, 'skills', C.SKILL_FILE);
+  if (X.isFile(dst)) { out('ok', `I: skill 已存在，仓库素材无需复制: ${dst}`); return; }
+  const src = repoSkillPath();
+  if (!X.isFile(src)) {
+    out('err', `--seed-from-repo: 仓库里没有 skills/${C.SKILL_FILE}（期望 ${src}）`);
+    process.exitCode = 2;
+    return;
+  }
+  if (!flags.apply) {
+    out('plan', `I: skill 缺失 → 将从仓库素材复制: ${src} → ${dst}（dry-run 未写）`);
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    X.copyFile(src, dst);
+    out('ok', `I: skill 已从仓库素材复制: ${src} → ${dst}`);
+  } catch (err) {
+    out('err', `--seed-from-repo: 复制失败（${(err && err.message) || err}）；请手工放置 ${dst}`);
+    process.exitCode = 2;
+  }
+}
+
 function cmdInstall(home, flags) {
+  // v0.7.9：先按需从仓库素材补 skill（planInstall 按现场算计划，所以必须在算计划之前落盘）
+  seedFromRepoIfAsked(home, flags);
   const p = planInstall(home, flags);
   out('plan', `install(${flags.apply ? 'apply' : 'dry-run'}) · agents-mode=${p.mode}`);
   if (p.blockers.length) {

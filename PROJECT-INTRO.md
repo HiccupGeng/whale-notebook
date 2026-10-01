@@ -137,7 +137,12 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | `uninstall purge` | 全清：必须 `--export-dir` + `--yes`（先导出成果后删除） |
 
 - **约定**：卸载计划先输出**成果文件清单**（待审/条目/归档计数+去留）——AI 删除前必先经用户确认；漂移守卫（登记后文件被改需 `--yes`）；快照 `backups/` 支持重装字节还原。
-- **已验证**（2026-09-09 本机真实卸载演练 + 沙盒自测；2026-09-10 补 R 段）：remove → 核对 → 重装 hash 一致；沙盒 **104 PASS / 0 FAIL**；R 段自测含反证「不碰真实 home 的 cordis.patch.yml」；本机已用 `install --apply` 完成清单迁移（旧条目 `runtime-pkg`/`runtime-bundles` → `runtime-web-pkg`/`runtime-web-patch`）与重新登记，`check` 全绿。
+- **新机安装的两条硬前置（v0.7.9 补文档，实测踩过）**：
+  1. `~/.dsh/whale-notebook/` 数据目录**必须先存在**（否则报「数据目录不存在」exit 2）；
+  2. L2 技能 `~/.dsh/skills/whale-notebook.md` **必须先就位**（否则报「skill 缺失且无种子/备份」exit 2）。
+     缺它的历史原因：该文件此前从不进仓库，只存在于开发机 → 新机照文档走必然卡死。
+     现在仓库根自带 `skills/whale-notebook.md`，加 **`--seed-from-repo`** 即可自动复制（尊重两段式：dry-run 只报告、`--apply` 才写；DSH 技能热加载，放好即注册、无需重启）。
+- **已验证**（2026-09-09 本机真实卸载演练 + 沙盒自测；2026-09-10 补 R 段；2026-10-01 补 desktop profile 与 `--seed-from-repo`）：remove → 核对 → 重装 hash 一致；沙盒 **137 PASS / 0 FAIL**；含反证「不碰真实 home 的 cordis.patch.yml」与 F6l desktop 端到端；`--seed-from-repo` 实测 dry-run 零写盘、`--apply` 后与仓库素材逐字节一致、重跑幂等。
 
 ## 7. 隐私与安全模型（红线）
 
@@ -150,7 +155,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 
 ## 8. 现状与路线图
 
-> 当前 `plugin` 版本 **v0.7.8**（生命周期工具 **v0.2.0**）｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
+> 当前 `plugin` 版本 **v0.7.9**（生命周期工具 **v0.2.0**）｜ 每个版本的完整沿革（起因/实现/实测/裁定）见仓库根 **`CHANGELOG.md`**，本节只留一览。
 
 | 版本 | 一句话 | 状态 |
 |---|---|---|
@@ -171,6 +176,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | **0.7.6** | **回声自我放大治理 + 暂存污染清理 + 双计口径加固**：① **回声落档改「稳定签名 + 幂等追加」**（签名 = `类别\|一句话现象(≤90字)`，与归档列同口径；旧的按聚簇哈希分组会让同一现象每次被打印都新开一行——实测 231 行只对应 77 个现象、单现象最多 8 行）② **签名表补全（A2）**：新增 `META_ARTIFACT`（`seenFingerprints`/`nextCandidateId`/`reAddedAt` 等 state 字段名、`topKeys=`/`parts=N [`/`== clusters sample` 等探针抬头、`\| 时间 \| 类别 \|` 表头）单条即判 + 「`"ok":true` + 我们 API 的键名」信封判据 ③ **按出处整类拦截（A3）**：命令碰过我们的**数据产物/接口**且结果是**我们渲染的结构化输出** → 判回声（只碰 `plugin/src\|lib\|scripts` 的开发调试不算，跑自检发现的真实 bug 继续进箱）④ 当日分片超 400 行自动轮转 `echo-<日期>-2.md`，`/whale/live` 增 `echo`（当日/累计行数）与 `dedup`（`toolUnknown`/`skippedByFingerprint`）⑤ `mine.cjs --forget-echo [--apply]` 清理历史污染（实测 18 组暂存里 13 组 = 72% 是自引用输出，清理后剩 5 组真实发现） | ✅ |
 | **0.7.7** | **扫描让出事件循环 + rebuild 维护窗口 + 漂移分级（lifecycle 0.2.0）**：① **`scanHistory`/`runScanInner` 改生成器 + 双驱动**，宿主 `runScanAsync` 在让出点 `await setImmediate`；让出粒度经**实测修正**为"大日志按 256KB 窗口续读"（第一版"每 8 文件/4MB"实测宿主仍卡 **3857ms** → 修正后**最大卡顿 69ms**）→ 点 ⟳ 触发全量扫描（52MB ≈6s）时面板/GUI/实时采集不再被独占；`/whale/live` 增 `scanJob`，卸载置取消位（一定释放写锁）② **`--rebuild` 开维护窗口**（`.maintenance.json` + TTL 兜底）：实时采集**让路但不丢事件**（缓冲 + 1s 重试 + `heldByMaintenance` 计数），`finally` 无条件关窗；`/whale/live` 增 `maintenance` ③ **漂移判定分级**：`lifecycle check` 只在缺失/结构损坏（截断/乱码/frontmatter 丢失/必需小节消失）/孤儿/清单待迁移时 exit 1，**「内容变了但结构完好」= 合法演进（「待登记」，exit 0）**，新增 `check --adopt` 重新登记基线；**AGENTS 迁到 `zones` 模式**（只管理两个标记区，区外是用户自己的内容，`remove` 只剥区不删整文件）——实测本机 `check` 由恒 exit 1 变为 exit 0，AGENTS.md 字节未变 | ✅ |
 | **0.7.8** | **待审箱两个新入口**：① 页脚**「自动收集」开关**（`自动入箱`｜`仅暂存`）= `settings.autoAdd`，新增 `GET/POST /whale/settings`：**只写 `settings.json`**（`readSettingsStrict` 严格读防"读-改-写吃掉用户其它设置" + 原子写 + `autoAdd` 键白名单），状态取自服务端而非 localStorage，**不写 AGENTS.md**（提醒句改"以 `--check` 输出为准"的双模式自述，注入永不撒谎）② 页头 **⛏「历史深掘」** = `POST /whale/sweep`：阶段① `--add` 保底（暂存先入箱，防重建清空丢件）→ 阶段② `--rebuild --add`（全量重扫全部历史直接入箱；已处置不复活、在箱候选只累加不重复开行、编号下限取 max(在箱,归档)+1；单轮开行上限 30→**500** 并显式报 `dropped`）；与 `/whale/scan` 共用互斥位、复用让出事件循环与维护窗口、`scanJob.kind='sweep'` 带阶段进度、`{dry:true}` 只读预演；完成后**自动开一个新会话**做「历史错误总结/同族合并建议/入库草案」（落点＝鲸鱼全局，开局消息含扫描统计+清单 ≤20 条+只读约束；无新发现且待审为空则不开，不花 token）③ **面板记忆 pin**：主动开过面板后待审为 0 也保留入口（否则"待审=0 且要切开关"时够不着） | ✅ 当前（宿主半边待重启） |
+| **0.7.9** | **面板部署支持 desktop profile（Windows 桌面版）**：目标 profile 可配置（`--profile` > `DSH_PROFILE` > 默认 `web`）——桌面版跑 `desktop`，此前写死 `profiles/web` 会"部署成功但面板永不出现"（静默失效）；profile 不存在即明确报错并列出可用项；生效 profile 记入 `.lifecycle/runtime-profile.json` 供 lifecycle 对账/`detach`。**新机安装补全**：仓库纳入 `skills/`（此前该文件从不进仓库 → 新机 `install` 卡死），新增 **`install --seed-from-repo`** 从仓库素材自动补技能；`sync-release.cjs` 加两条护栏（技能缺失拒绝同步、docs 完整性不足拒绝删）。**修一个隐藏 bug**：站点清单 R 段路径原先只在首次 install 解析一次、之后永不刷新 → 路径动态化后会"部署了却登记 absent"。 | ✅ 当前 |
 
 - **待生效提醒（v0.7.9 实测更正，含一次自我纠错）**：宿主半边与浏览器半边**都需重启 dsh**——
   - **宿主半边（`lib/index.js`/`src/**`：实时采集、`/whale/*` 端点）需重启**。判据（2026-10-01 直接实测）：把权威源与部署副本升到 0.7.9 并 `--apply` 后，**不重启**请求 `GET /whale/live` 仍报 `version: 0.7.8` —— 运行中的实例**不会**重新加载已加载模块的代码，也不重新解析加载器行。

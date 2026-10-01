@@ -20,7 +20,12 @@ function ok(cond, msg) {
   else { fail++; console.log(`  FAIL ${msg}`); }
 }
 function run(args, opts) {
-  const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', ...(opts || {}) });
+  // v0.7.9：opts.cli 可指定另一份 cli.cjs（F8 用它验证“从仓库素材安装”时仓库根的推导）
+  const o = opts || {};
+  const cli = o.cli || CLI;
+  const rest = Object.assign({}, o);
+  delete rest.cli;
+  const r = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', ...rest });
   return { status: r.status, text: (r.stdout || '') + (r.stderr || '') };
 }
 function expectExit(r, code, msg) {
@@ -463,6 +468,63 @@ function f6RuntimeSegment() {
   ok(siteEntry(homeD, 'runtime-web-patch').state === 'absent', 'F6l 摘除后 patch=absent');
 }
 
+// ================= F8（v0.7.9）: 从仓库素材安装（--seed-from-repo） =================
+// 动机（新机实测踩到）：install 把 L2 技能当必需前置（缺失 exit 2），而它此前从不进仓库
+//   → 照 README 走必然卡死。现在仓库根自带 skills/whale-notebook.md，--seed-from-repo 自动补。
+// 关键点：仓库根是**从 cli.cjs 自身位置推导**的（上两级），所以这里造一个"仓库布局"的沙盒：
+//   <TMP>/f8-repo/{plugin/lifecycle/cli.cjs, skills/whale-notebook.md}
+function f8SeedFromRepo() {
+  console.log('\n[F8] 从仓库素材安装（--seed-from-repo）: 两段式 / 逐字节 / 幂等 / 缺素材明说');
+  const repoRoot = path.join(TMP, 'f8-repo');
+  const sbCli = path.join(repoRoot, 'plugin', 'lifecycle', 'cli.cjs');
+  fs.mkdirSync(path.dirname(sbCli), { recursive: true });
+  fs.copyFileSync(CLI, sbCli); // 用同一份 cli.cjs，确保测的是当前的推导逻辑
+  const repoSkill = path.join(repoRoot, 'skills', 'whale-notebook.md');
+  fs.mkdirSync(path.dirname(repoSkill), { recursive: true });
+  // 素材来源：优先仓库根的 skills/（按目录名从 PKG 推导）；在"运行实例"里跑时回退到真实 ~/.dsh/skills/
+  const realRepoSkill = path.join(path.dirname(PKG), 'skills', 'whale-notebook.md');
+  const installedSkill = path.join(os.homedir(), '.dsh', 'skills', 'whale-notebook.md');
+  const srcForFixture = fs.existsSync(realRepoSkill) ? realRepoSkill : installedSkill;
+  if (!fs.existsSync(srcForFixture)) { fail++; console.log(`  FAIL F8 夹具缺素材: ${srcForFixture}`); return; }
+  fs.copyFileSync(srcForFixture, repoSkill); // 真仓库素材
+
+  const home = path.join(TMP, 'f8-home');
+  mkNb(home);
+
+  // a) dry-run：报告"将复制"，但零写盘（两段式纪律）
+  let r = run(['install', '--seed-from-repo', '--home', home], { cli: sbCli });
+  expectText(r, '将从仓库素材复制', 'F8a dry-run 报告将复制');
+  expectText(r, 'dry-run 未写', 'F8a 明示未写');
+  ok(!fs.existsSync(path.join(home, 'skills', 'whale-notebook.md')), 'F8a dry-run 零写盘（技能未落位）');
+  // 不加 --seed-from-repo 时仍是老行为（阻塞）—— 防"偷偷自动复制"改变既有语义
+  r = run(['install', '--home', home], { cli: sbCli });
+  expectExit(r, 2, 'F8b 不加参数仍阻塞（语义未被偷偷改变）');
+  expectText(r, 'skill 缺失且无种子/备份', 'F8b');
+  // c) apply：复制成功 + 逐字节一致 + install 一并完成
+  r = run(['install', '--apply', '--seed-from-repo', '--home', home], { cli: sbCli });
+  expectExit(r, 0, 'F8c install --apply --seed-from-repo');
+  expectText(r, 'skill 已从仓库素材复制', 'F8c 报告已复制');
+  const placed = path.join(home, 'skills', 'whale-notebook.md');
+  ok(fs.existsSync(placed), 'F8c 技能已落位');
+  ok(fs.readFileSync(placed).equals(fs.readFileSync(repoSkill)), 'F8c 与仓库素材逐字节一致');
+  ok(siteEntry(home, 'skill').state === 'installed', 'F8c 站点清单登记 skill=installed');
+  // d) 幂等：再跑一次不重复复制、不报错
+  r = run(['install', '--apply', '--seed-from-repo', '--home', home], { cli: sbCli });
+  expectExit(r, 0, 'F8d 二次 apply 幂等');
+  expectText(r, 'skill 已存在，仓库素材无需复制', 'F8d 幂等跳过复制');
+  // e) 仓库里没有素材时明说（不静默成功）
+  const emptyRepo = path.join(TMP, 'f8-empty');
+  const emptyCli = path.join(emptyRepo, 'plugin', 'lifecycle', 'cli.cjs');
+  fs.mkdirSync(path.dirname(emptyCli), { recursive: true });
+  fs.copyFileSync(CLI, emptyCli);
+  const home2 = path.join(TMP, 'f8-home2');
+  mkNb(home2);
+  r = run(['install', '--apply', '--seed-from-repo', '--home', home2], { cli: emptyCli });
+  expectExit(r, 2, 'F8e 缺素材 → exit 2');
+  expectText(r, '仓库里没有 skills/whale-notebook.md', 'F8e 明确指出缺什么');
+  ok(!fs.existsSync(path.join(home2, 'skills', 'whale-notebook.md')), 'F8e 未落任何技能文件');
+}
+
 // ================= main =================
 TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-lc-'));
 console.log(`自测沙盒: ${TMP}`);
@@ -474,6 +536,7 @@ try {
   f4ZonesMode();
   f5DriftGuard();
   f6RuntimeSegment();
+  f8SeedFromRepo();
   console.log(`\n结果: ${pass} PASS / ${fail} FAIL`);
   if (fail) process.exitCode = 1;
 } finally {

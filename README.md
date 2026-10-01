@@ -29,19 +29,35 @@
 ```powershell
 # 1) 取源码
 git clone https://github.com/HiccupGeng/whale-notebook.git
-# 2) 放置运行源码（DSH 数据目录下）
+
+# 2) 放置运行源码（DSH 数据目录下）—— 仓库里 plugin/ scripts/ skills/ 都是安装素材
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\whale-notebook" | Out-Null
 Copy-Item -Recurse whale-notebook\plugin  "$env:USERPROFILE\.dsh\whale-notebook\plugin"
 Copy-Item -Recurse whale-notebook\scripts "$env:USERPROFILE\.dsh\whale-notebook\scripts"
 Copy-Item whale-notebook\PROJECT-INTRO.md "$env:USERPROFILE\.dsh\whale-notebook\"
+
 # 3) 登记安装（两段式：先干跑看计划，确认后 --apply）
-node "$env:USERPROFILE\.dsh\whale-notebook\plugin\lifecycle\cli.cjs" install
-node "$env:USERPROFILE\.dsh\whale-notebook\plugin\lifecycle\cli.cjs" install --apply
+#    --seed-from-repo：自动从仓库 skills/ 补 L2 技能文件到 ~/.dsh/skills/
+#       （技能是 install 的必需前置；DSH 技能热加载，放好即注册，无需重启）
+node "$env:USERPROFILE\.dsh\whale-notebook\plugin\lifecycle\cli.cjs" install --seed-from-repo
+node "$env:USERPROFILE\.dsh\whale-notebook\plugin\lifecycle\cli.cjs" install --apply --seed-from-repo
+
 # 4) 采集一次看看（增量、0 token）
 node "$env:USERPROFILE\.dsh\whale-notebook\scripts\mine.cjs" --check
-# 5) 可选：部署 GUI 决策箱悬浮面板（改 profile → 需重启 dsh web）
+
+# 5) 可选：部署 GUI 决策箱悬浮面板（部署后需重启 dsh 才加载）
 node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --apply
+#    桌面版（Windows 的 DeepSeek Harness.exe）跑的是 desktop profile，
+#    该工具会读 DSH 注入的 DSH_PROFILE 自动命中；也可显式指定 --profile desktop
 ```
+
+> **关于第 3 步的两条硬前置**（照上面的命令走就都满足了）：
+> 1. **`~/.dsh/whale-notebook/` 数据目录必须先存在** —— 第 2 步已创建；缺了会报「数据目录不存在」（exit 2）。
+> 2. **L2 技能 `~/.dsh/skills/whale-notebook.md` 必须先就位** —— 由 `--seed-from-repo` 从仓库 `skills/` 自动复制；
+>    不加这个参数就得手工复制，否则 `install` 会因为「skill 缺失且无种子/备份」直接拒绝（exit 2）。
+>
+> `AGENTS.md` 不用管：缺失时 `install` 会按内置模板创建（含两个标记区）。
+> **建议加 `--agents-mode zones`**（只管理两个标记区，区外是你自己的内容，`uninstall remove` 只剥区、不整文件删除）。
 
 装完在会话里说 **「小本本复盘」** 即可开始审核。卸载同样两段式：`uninstall detach`（只摘运行时面板）→ `remove`（R+I，**用户记忆原样保留**）→ `purge`（全清，需先 `--export-dir` 导出 + `--yes`），详见 `plugin/lifecycle/README.md`。
 
@@ -64,13 +80,15 @@ node "$env:USERPROFILE\.dsh\whale-notebook\plugin\scripts\deploy-web.cjs" --appl
 |---|---|
 | `plugin/` | 插件包源码：`core`(领域) · `store`(数据) · `collector`(采集) · `inject`(生效) · `review`(审核) · `ui`(面板/视图模型) · `lifecycle/`(自举安装卸载) · `scripts/deploy-web.cjs`(面板部署，R 段唯一写入者) · `lib/`(host half + browser half) |
 | `scripts/` | v1 兼容薄壳 `mine.cjs` 与打码回归 `redact.test.cjs` |
-| `docs/` | 设计/实施/调研记录（九份，含 v0.5–v0.7 的详细方案） |
+| `skills/whale-notebook.md` | **L2 技能**（操作手册：触发词→流程）。`install` 的必需前置 → 装到 `~/.dsh/skills/`；用 `install --seed-from-repo` 可从仓库自动复制 |
+| `docs/` | 设计/实施/调研记录（15 份，含 v0.5–v0.7 详细方案、安全审计、以及新机接手用的项目全貌导读） |
 | `PROJECT-INTRO.md` | **项目全景导读**：目录地图 / 数据不变式 / 模块地图 / 常用命令 → 新上手或 AI 会话先读这份 |
 | `CHANGELOG.md` | **版本沿革明细**：每个版本解决了什么问题、怎么解决、实测数据 |
-| `tools/sync-release.cjs` | 一键发布：权威源 → 本仓库镜像 → commit → push（幂等） |
+| `tools/sync-release.cjs` | 一键发布：权威源 → 本仓库镜像 → commit → push（幂等；v0.7.9 起含 `skills/` 与 docs 完整性护栏） |
 
 > `README.md`、`CHANGELOG.md` 与 `LICENSE` 为**手工维护**（不参与镜像同步）；其余目录与 `PROJECT-INTRO.md` 是本机运行源码的逐字节镜像。
 > 运行实例与用户数据在 `~/.dsh/whale-notebook/`，**永不入库**。
+> **装到新机器**：`plugin/`+`scripts/`+`skills/`+`PROJECT-INTRO.md` 都是安装素材 —— 见上面「快速开始」。
 
 ## 隐私边界（务必遵守）
 

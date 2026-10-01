@@ -145,6 +145,9 @@ const HELP = `dsh-whale-notebook lifecycle ${VERSION} — 安装/卸载/清单�
                               目标缺失时用于创建; 迁移/全新机用）
   --export-dir <dir>          purge 导出目录（必填）
   --yes                       二次确认（purge 必填; remove 遇漂移时也需; detach 时=连副本目录一起删）
+  --seed-from-repo            （install 用）从**仓库自带素材**补 I 段 skill:
+                              <repo>/skills/whale-notebook.md → <dshHome>/skills/whale-notebook.md
+                              新机不必先手工复制技能文件（DSH 技能热加载, 放好即注册, 无需重启）
   --home <dir>                覆盖 DSH_HOME（沙盒自测用）
 
 约定: 所有写操作先 --dry-run 出计划, 展示给用户确认后再 --apply。`;

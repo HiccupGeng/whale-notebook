@@ -125,10 +125,19 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --profile desk
 node lifecycle/cli.cjs status                 # 阶段/足迹/上次操作(含 R 段对账)
 node lifecycle/cli.cjs check                  # 清单 vs 现场对账 + 孤儿扫描(退出码 1 = 有问题)
 node lifecycle/cli.cjs install                # 干跑出计划 → 确认后加 --apply
+node lifecycle/cli.cjs install --seed-from-repo   # v0.7.9: 从仓库 skills/ 自动补 L2 技能(新机友好)
 node lifecycle/cli.cjs uninstall remove       # 清 R+I, D 原样保留(记忆永不清)
 node lifecycle/cli.cjs uninstall purge        # 全清: 必须 --export-dir <目录> --yes(先导出后删除)
 node lifecycle/cli.cjs uninstall detach       # 仅 R 段(驱动 deploy-web --undo; 加 --yes 连副本目录一起删)
 ```
+
+**新机安装的两条硬前置（v0.7.9 补，实测踩过）**：
+1. **`<dshHome>/whale-notebook/` 数据目录必须先存在**（否则报「数据目录不存在」exit 2）；
+2. **L2 技能 `<dshHome>/skills/whale-notebook.md` 必须先就位**（否则报「skill 缺失且无种子/备份」exit 2）。
+   缺它的历史原因：该文件此前**从不进仓库**（`sync-release.cjs` 的权威源不含 `skills/`），只存在于开发机 → 新机照文档走必然卡死。
+   现在仓库根自带 `skills/whale-notebook.md`，加 **`--seed-from-repo`** 即可自动复制到 `<dshHome>/skills/`。
+   它尊重两段式（dry-run 只报告"将复制"、`--apply` 才写）；DSH 技能**热加载**，放好即注册，**无需重启**。
+   AGENTS.md 不用准备：缺失时 `install` 会按内置模板创建（含两个标记区）。
 
 要点（与设计文档的偏差/裁定记录）:
 
