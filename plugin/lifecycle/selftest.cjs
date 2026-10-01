@@ -477,8 +477,13 @@ function f8SeedFromRepo() {
   console.log('\n[F8] 从仓库素材安装（--seed-from-repo）: 两段式 / 逐字节 / 幂等 / 缺素材明说');
   const repoRoot = path.join(TMP, 'f8-repo');
   const sbCli = path.join(repoRoot, 'plugin', 'lifecycle', 'cli.cjs');
+  // 夹具：造"仓库布局" —— cli.cjs 依赖同目录的 consts/zones/manifest/fsx + 上级 manifest.json，
+  //   所以整份 lifecycle/ 都要就位（只拷 cli.cjs 会 MODULE_NOT_FOUND 而静默 exit 1）。
   fs.mkdirSync(path.dirname(sbCli), { recursive: true });
-  fs.copyFileSync(CLI, sbCli); // 用同一份 cli.cjs，确保测的是当前的推导逻辑
+  for (const f of fs.readdirSync(__dirname)) {
+    if (f.endsWith('.cjs')) fs.copyFileSync(path.join(__dirname, f), path.join(path.dirname(sbCli), f));
+  }
+  fs.copyFileSync(path.join(PKG, 'manifest.json'), path.join(repoRoot, 'plugin', 'manifest.json'));
   const repoSkill = path.join(repoRoot, 'skills', 'whale-notebook.md');
   fs.mkdirSync(path.dirname(repoSkill), { recursive: true });
   // 素材来源：优先仓库根的 skills/（按目录名从 PKG 推导）；在"运行实例"里跑时回退到真实 ~/.dsh/skills/
@@ -516,7 +521,10 @@ function f8SeedFromRepo() {
   const emptyRepo = path.join(TMP, 'f8-empty');
   const emptyCli = path.join(emptyRepo, 'plugin', 'lifecycle', 'cli.cjs');
   fs.mkdirSync(path.dirname(emptyCli), { recursive: true });
-  fs.copyFileSync(CLI, emptyCli);
+  for (const f of fs.readdirSync(__dirname)) {
+    if (f.endsWith('.cjs')) fs.copyFileSync(path.join(__dirname, f), path.join(path.dirname(emptyCli), f));
+  }
+  fs.copyFileSync(path.join(PKG, 'manifest.json'), path.join(emptyRepo, 'plugin', 'manifest.json'));
   const home2 = path.join(TMP, 'f8-home2');
   mkNb(home2);
   r = run(['install', '--apply', '--seed-from-repo', '--home', home2], { cli: emptyCli });

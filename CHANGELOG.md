@@ -62,12 +62,38 @@
 结论：**宿主半边与浏览器半边都需重启**（前者是运行中实例不重新加载已加载模块，后者是 client bundle 加载图启动时算定）。
 由此补一条判据：**对账通过 ≠ 已生效** —— 重启前 `/whale/live` 的 `version` 才是"运行中实际是哪一版"。
 
+### ④ `install --seed-from-repo`：从仓库素材安装（新机不再"半成品"）
+
+**起因**：用户复盘安装过程时指出——「刚刚安装时是我把自己开发机上的 `whale-notebook.md` 复制过来才装上的；
+能不能把这个也集成到 Git 里？新用户安装缺这个会比较糟糕，感觉是个半成品」。
+
+**问题拆开看是两层**：① 那个文件此前**从不进仓库**（`sync-release.cjs` 的权威源不含 `skills/`）——第 ② 节已修；
+② 即便文件进了仓库，**安装流程与文档都没用它** —— `README` 的快速开始只让用户复制 `plugin/` + `scripts/` + `PROJECT-INTRO.md`，
+没有任何一步把技能文件放到 `~/.dsh/skills/`，而 `install` 又把它当**必需前置**（缺失即 exit 2 拒绝）。
+照文档走的结局必然是卡在 `skill 缺失且无种子/备份`。
+
+**修法**：新增 `install --seed-from-repo`，从**仓库自带素材**补 I 段技能：
+`<repo>/skills/whale-notebook.md` → `<dshHome>/skills/whale-notebook.md`。
+- 仓库根**从 `cli.cjs` 自身位置推导**（上两级），不依赖当前工作目录，也不新增任何配置项；
+- **尊重两段式**：dry-run 只报告"将从仓库素材复制 …（dry-run 未写）"，`--apply` 才真复制；
+- **幂等**：目标已存在时报告"仓库素材无需复制"并跳过；
+- **不静默**：仓库里没有该文件时明确报错（exit 2）并打印期望路径，不假装成功；
+- **不偷偷改变既有语义**：不加该参数时行为与从前完全一致（仍阻塞并提示 `--seed-dir`）——自测 F8b 专门钉住这一点；
+- 顺带发现并写进文档：DSH 的 skill 是**热加载**的（`<dshHome>/skills/` 下出现文件即注册），所以放好后**无需重启**。
+
+**同类修复**：`plugin/README.md` 与 `PROJECT-INTRO.md` 都把"两条硬前置"写明（数据目录必须存在、技能必须就位），
+`README.md` 快速开始改成 `install --seed-from-repo` 的两段式命令，并新增"关于第 3 步的两条硬前置"提示块；
+根 `README` 目录表新增 `skills/` 一行并注明"都是安装素材"。
+
 ### 验证
 
-- **`lifecycle/selftest` 120 → 137（+17）**：原 2 条路径断言改为 `{profile}` 模板断言 + 解析结果断言（web/desktop 双向）；
+- **`lifecycle/selftest` 120 → 152（+32）**：原 2 条路径断言改为 `{profile}` 模板断言 + 解析结果断言（web/desktop 双向）；
   新增 **F6l desktop 端到端 15 条** —— 独立 home 造 desktop 现场，覆盖"无记录回退 web"与"记录 desktop 后认到现场"的**对照**、
-  `check` 按 desktop 对账、`detach` 摘除打在 desktop 且用户自己的 patch 行原样保留。
-- **全量：626 PASS / 0 FAIL**（15 套件 + bundle-smoke 结构桩，16 个测试文件）。
+  `check` 按 desktop 对账、`detach` 摘除打在 desktop 且用户自己的 patch 行原样保留；
+  新增 **F8 `--seed-from-repo` 15 条** —— 造"仓库布局"沙盒（`<repo>/{plugin/lifecycle,skills}`），覆盖
+  dry-run 报告将复制且**零写盘**、不加参数**语义未变**（仍 exit 2）、`--apply` 后与仓库素材**逐字节一致**、
+  站点清单登记 `skill=installed`、二次 apply **幂等**、仓库缺素材时 **exit 2 且指出缺什么**。
+- **全量：641 PASS / 0 FAIL**（15 套件 + bundle-smoke 结构桩，16 个测试文件）。
 - **本机安装端到端实测**：`install --apply --agents-mode zones`（exit 0、`AGENTS zones 标记区齐备, 零改动`）→
   `deploy-web --apply`（46 文件 → `profiles/desktop/`，patch 尾部追加，自检"与权威源逐字节一致"通过）→
   `mine.cjs --check` **新发现 7 条**（3 日志 1.46MB，172ms，0 token）→ 6 个 GET 端点 + 写端点全 200 →

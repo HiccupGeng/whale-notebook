@@ -116,7 +116,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
 | 挂载 | `cordis.patch.yml` | 主机平面挂载行模板（参考；现场行由 deploy-web.cjs 写 `profiles/{profile}/cordis.patch.yml` 的标记区） | — |
 | ★部署 | `scripts/deploy-web.cjs` | **R 段唯一写入者**：复制包 → `profiles/{profile}/node_modules` + 在 `profiles/{profile}/cordis.patch.yml` 标记区插/摘加载器行（幂等 dry/apply/undo/check；**v0.7.1 起 `check` 含与权威源逐文件字节对账**，副本陈旧即 exit 1——避免「check 通过却没部署」；**v0.7.9 起目标 profile 可配置**：`--profile <name>` > `DSH_PROFILE` > 默认 `web`，profile 不存在时明确报错并列出可用项，部署成功后记录到 `.lifecycle/runtime-profile.json`；生效需重启 dsh） | — |
 | ★维护 | `scripts/links-doctor.cjs` | 工具主目录**悬空链接（junction/死链）**体检/清理：**默认只读**（exit 3 = 发现悬空）；`--apply` 逐条复验后**只摘链接本身**（根外路径/实体目录/有效链接/目标已修复一律不碰），跑完自动复查。成因 = pnpm/npx 重装换掉旧 junction 指的目标；危害 = ripgrep 搜索模式 exit 2 → **整次检索结果被丢弃**（条目 E005）。纯 CLI，不影响部署，无需重启 | `scanDangling`、`removeLinks`、`isUnder` |
-| 测试 | 15 套自检：`lifecycle`(137) · `ui/server`(82) · `core/privacy·summarize·similarity`(23+10+20) · `store/repo`(34) · `collector/engine·engine.dedup·e2e·live·sweep`(38+24+67+48+20) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(22) + `scripts/links-doctor.selftest.cjs`(43) + `scripts/panel-actions.selftest.cjs`(30) + `scripts/discuss-route.selftest.cjs`(28) | **2026-10-01 共 626 断言全绿**（v0.7.9：`lifecycle` 120→137，新增 F6l desktop 端到端 15 条 + 更新 2 条路径断言）；16 个测试文件 | — |
+| 测试 | 15 套自检：`lifecycle`(152) · `ui/server`(82) · `core/privacy·summarize·similarity`(23+10+20) · `store/repo`(34) · `collector/engine·engine.dedup·e2e·live·sweep`(38+24+67+48+20) + `scripts/bundle-smoke.cjs`(结构断言) + `scripts/redact.test.cjs`(22) + `scripts/links-doctor.selftest.cjs`(43) + `scripts/panel-actions.selftest.cjs`(30) + `scripts/discuss-route.selftest.cjs`(28) | **2026-10-01 共 641 断言全绿**（v0.7.9：`lifecycle` 120→137，新增 F6l desktop 端到端 15 条 + 更新 2 条路径断言）；16 个测试文件 | — |
 | ★自举 | `lifecycle/` | 安装/卸载/清单（第 0 功能，**仅 node 内建**，与业务模块解耦；速查见 `lifecycle/README.md`） | `cli.cjs` 等 |
 | ★清单 | `manifest.json` | 包内默认足迹清单（I/D/R 条目 = 卸载白名单；R 段标 `managedBy`/`markers`，state=probe 由现场探测） | — |
 
@@ -142,7 +142,7 @@ DeepSeek Harness（DSH）的**自我进化机制**：把本机全部工作区会
   2. L2 技能 `~/.dsh/skills/whale-notebook.md` **必须先就位**（否则报「skill 缺失且无种子/备份」exit 2）。
      缺它的历史原因：该文件此前从不进仓库，只存在于开发机 → 新机照文档走必然卡死。
      现在仓库根自带 `skills/whale-notebook.md`，加 **`--seed-from-repo`** 即可自动复制（尊重两段式：dry-run 只报告、`--apply` 才写；DSH 技能热加载，放好即注册、无需重启）。
-- **已验证**（2026-09-09 本机真实卸载演练 + 沙盒自测；2026-09-10 补 R 段；2026-10-01 补 desktop profile 与 `--seed-from-repo`）：remove → 核对 → 重装 hash 一致；沙盒 **137 PASS / 0 FAIL**；含反证「不碰真实 home 的 cordis.patch.yml」与 F6l desktop 端到端；`--seed-from-repo` 实测 dry-run 零写盘、`--apply` 后与仓库素材逐字节一致、重跑幂等。
+- **已验证**（2026-09-09 本机真实卸载演练 + 沙盒自测；2026-09-10 补 R 段；2026-10-01 补 desktop profile 与 `--seed-from-repo`）：remove → 核对 → 重装 hash 一致；沙盒 **152 PASS / 0 FAIL**；含反证「不碰真实 home 的 cordis.patch.yml」与 F6l desktop 端到端；`--seed-from-repo` 实测 dry-run 零写盘、`--apply` 后与仓库素材逐字节一致、重跑幂等。
 
 ## 7. 隐私与安全模型（红线）
 
@@ -214,7 +214,7 @@ node ~/.dsh/whale-notebook/scripts/mine.cjs --check|--add|--prewarm|--stats|--fu
                                                                    # 采集 CLI(v1 壳): --check 增量(热启 ~10ms) / --add 暂存冲入待审箱(v0.6) /
                                                                    #   --stats 纯只读 / --full 全量校验 / --rebuild 从头梳理(v0.6.1) / --wall 已解决墙预览(v0.4)
                                                                    #   退出码(v0.7.3): 0 成功(有新发现亦为 0) / 2 前置缺失(sessions 或数据目录不存在) / 1 失败
-node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周期沙盒自测(137 PASS, 含 R 段/漂移分级/adopt/desktop profile 端到端/"不碰真实部署"反证)
+node ~/.dsh/whale-notebook/plugin/lifecycle/selftest.cjs           # 生命周期沙盒自测(152 PASS, 含 R 段/漂移分级/adopt/desktop profile 端到端/"不碰真实部署"反证)
 node ~/.dsh/whale-notebook/plugin/lifecycle/cli.cjs status|check[ --adopt]|install|uninstall detach|remove|purge …
                                                                    # 生命周期工具(v0.2.0: R 段真登记/对账, detach 驱动 deploy-web; check 漂移分级)
 node ~/.dsh/whale-notebook/plugin/scripts/deploy-web.cjs [--apply|--check|--undo] [--profile <name>]

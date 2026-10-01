@@ -18,7 +18,7 @@ plugin/
 │  ├─ zones.cjs            # AGENTS 标记区几何操作(纯文本; 亦用于 R 段 patch 标记区对账)
 │  ├─ manifest.cjs         # 站点清单 .lifecycle/manifest.json 存取/合并/迁移/快照
 │  ├─ fsx.cjs              # 原子写/哈希/树复制删除(字节安全)
-│  └─ selftest.cjs         # 沙盒端到端自测(临时 home, 137 PASS: 含 R 段/漂移分级/desktop profile 端到端/"不碰真实部署"反证)
+│  └─ selftest.cjs         # 沙盒端到端自测(临时 home, 152 PASS: 含 R 段/漂移分级/desktop profile 端到端/"不碰真实部署"反证)
 ├─ scripts/
 │  ├─ deploy-web.cjs       # ★部署工具: 复制包 + patch 目标 profile(幂等; dry/apply/undo/check; v0.7.9 目标 profile 可配置)
 │  ├─ links-doctor.cjs     # ★维护工具: 工具主目录悬空链接(junction/死链)体检/清理(dry 默认只读, --apply 才删; 退出码 0/3/1)
@@ -109,7 +109,7 @@ node "$env:DSH_HOME\whale-notebook\plugin\scripts\deploy-web.cjs" --profile desk
 - **生效差异（v0.7.9 实测更正）**：**宿主半边与浏览器半边都需重启 dsh**。干净对照（2026-10-01 实测）：权威源与部署副本升到 0.7.9 并 `--apply --check` 通过后，**不重启**请求 `GET /whale/live` 仍报 `version: 0.7.8` —— 运行中的实例不会重新加载已加载模块的代码；client bundle 的加载图也在启动时算定（bundle 路由实测 404），同样需重启。**对账通过 ≠ 已生效**：重启前 `/whale/live` 的 `version` 才是"运行中实际是哪一版"的判据。`mine.cjs` 增量批扫与 `lifecycle/` 不依赖重启，立即可用。
   > 曾误记为"宿主部署后即生效、只有 UI 需重启"——那是观测 confound（先部署 → 重启 → 才测端点）。
 - dsh 升级/pnpm 重装清掉 `profiles/node_modules` 后重跑 `--apply` 即可；**重装会换掉旧 junction 指向的包缓存 → 留下悬空链接（死链）：它会让 ripgrep 搜索模式 exit 2、整次检索结果被丢弃（经验条目 E005）**。体检/清理用 `node scripts/links-doctor.cjs`（默认只读，exit 3 = 发现悬空）/ `--apply`（逐条复验后只摘链接本身）。
-- 验证（2026-10-01 实测全绿，v0.7.9）：`node src/ui/server.selftest.cjs`(82，v0.7.8 +19 自动收集开关) + `src/core/privacy.selftest.cjs`(23) + `src/core/summarize.selftest.cjs`(10) + `src/core/similarity.selftest.cjs`(20) + `src/store/repo.selftest.cjs`(34) + `src/collector/engine.selftest.cjs`(38，v0.7.8 +3 maxNewRows) + `src/collector/engine.dedup.selftest.cjs`(24) + `src/collector/e2e.selftest.cjs`(67) + `src/collector/live.selftest.cjs`(48) + `src/collector/sweep.selftest.cjs`(20，v0.7.8 新增：深掘全链) + `lifecycle/selftest.cjs`(**137**，v0.7.9：+F6l desktop 端到端 15 条、更新 2 条路径断言) = **626 断言 / 0 FAIL** + `node scripts/bundle-smoke.cjs`（bundle 桩）+ `scripts/redact.test.cjs`(22 断言) + `scripts/links-doctor.selftest.cjs`(43 断言) + `scripts/discuss-route.selftest.cjs`(28) + `scripts/panel-actions.selftest.cjs`(30)，全绿（16 个测试文件）。
+- 验证（2026-10-01 实测全绿，v0.7.9）：`node src/ui/server.selftest.cjs`(82，v0.7.8 +19 自动收集开关) + `src/core/privacy.selftest.cjs`(23) + `src/core/summarize.selftest.cjs`(10) + `src/core/similarity.selftest.cjs`(20) + `src/store/repo.selftest.cjs`(34) + `src/collector/engine.selftest.cjs`(38，v0.7.8 +3 maxNewRows) + `src/collector/engine.dedup.selftest.cjs`(24) + `src/collector/e2e.selftest.cjs`(67) + `src/collector/live.selftest.cjs`(48) + `src/collector/sweep.selftest.cjs`(20，v0.7.8 新增：深掘全链) + `lifecycle/selftest.cjs`(**152**，v0.7.9：+F6l desktop 端到端 15 条、更新 2 条路径断言) = **641 断言 / 0 FAIL** + `node scripts/bundle-smoke.cjs`（bundle 桩）+ `scripts/redact.test.cjs`(22 断言) + `scripts/links-doctor.selftest.cjs`(43 断言) + `scripts/discuss-route.selftest.cjs`(28) + `scripts/panel-actions.selftest.cjs`(30)，全绿（16 个测试文件）。
 
 ### 风险与前提（务必先读）
 
