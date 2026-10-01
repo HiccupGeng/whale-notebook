@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 
 const CLI = path.join(__dirname, 'cli.cjs');
 const PKG = path.resolve(__dirname, '..');
+const C = require('./consts.cjs'); // v0.7.9：{profile} 模板解析（F6a 直接验证解析结果）
 let pass = 0;
 let fail = 0;
 let TMP = null;
@@ -339,8 +340,17 @@ function f6RuntimeSegment() {
   ok(defPkg.segment === 'R' && defPatch.segment === 'R', 'F6a 两条均归 R 段');
   ok(defPkg.state === 'probe' && defPatch.state === 'probe', 'F6a R 段状态为 probe(现场探测, 不写死)');
   ok(defPkg.managedBy === 'scripts/deploy-web.cjs' && defPatch.managedBy === 'scripts/deploy-web.cjs', 'F6a 声明唯一写入者 scripts/deploy-web.cjs');
-  ok(/profiles[\\/]web[\\/]node_modules/.test(defPkg.path), 'F6a 包路径 = web profile 的 node_modules(真实部署位)');
-  ok(/cordis\.patch\.yml$/.test(defPatch.path), 'F6a 挂载行条目 = profiles/web/cordis.patch.yml');
+  // v0.7.9：R 段路径改带 {profile} 模板 —— 桌面版(desktop)与纯 Web 形态(web)部署位不同，
+  //   写死 web 会让桌面版"部署成功但面板不出现"（静默失效）。这里断言模板与解析后的真实部署位。
+  ok(/\{profile\}[\\/]node_modules[\\/]@deepseek-ai[\\/]dsh-whale-notebook$/.test(defPkg.path),
+    'F6a 包路径带 {profile} 模板 + 落在 @deepseek-ai/dsh-whale-notebook');
+  ok(/\{profile\}[\\/]cordis\.patch\.yml$/.test(defPatch.path), 'F6a 挂载行条目 = profiles/{profile}/cordis.patch.yml');
+  const ctxWeb = { home: TMP, nb: path.join(TMP, 'whale-notebook'), pkg: PKG, profile: 'web' };
+  ok(/profiles[\\/]web[\\/]node_modules/.test(C.resolvePathTpl(defPkg.path, ctxWeb)),
+    'F6a {profile}=web → 解析到 profiles/web/node_modules(向后兼容默认)');
+  const ctxDesk = Object.assign({}, ctxWeb, { profile: 'desktop' });
+  ok(/profiles[\\/]desktop[\\/]node_modules/.test(C.resolvePathTpl(defPkg.path, ctxDesk)),
+    'F6a {profile}=desktop → 解析到 profiles/desktop/node_modules');
   ok(!!D_MARK_START && !!D_MARK_END, 'F6a 已从 deploy-web.cjs 取出 MARK_START/MARK_END');
   // 清单里只存"标记行"本身(不带尾换行): 便于 hasZone 匹配且不受行尾风格影响
   const markerLine = (s) => String(s || '').replace(/\s+$/, '');
@@ -405,6 +415,52 @@ function f6RuntimeSegment() {
   // 反证: 全过程未触碰真实 home 的部署文件
   const realHashAfter = fs.existsSync(realPatch) ? fs.readFileSync(realPatch).toString('base64') : null;
   ok(realHashBefore === realHashAfter, 'F6k 反证: 真实 home 的 cordis.patch.yml 字节未变(DSH_HOME 覆盖生效)');
+
+  // ---- F6l（v0.7.9）：desktop profile 端到端 —— 桌面版（Windows 的 DeepSeek Harness.exe）
+  //   跑的是 desktop profile。若 R 段仍去 web 找足迹，会报“未部署”而把 desktop 上的
+  //   真实足迹留成孤儿（卸载更是卸载错的 profile）。本段用独立 home 造 desktop 现场来钉住。
+  const homeD = path.join(TMP, 'f6d-home');
+  const seedD = path.join(TMP, 'f6d-seed');
+  mkSeed(seedD, SKILL_SRC, null);
+  mkNb(homeD);
+  expectExit(run(['install', '--apply', '--home', homeD, '--seed-dir', seedD]), 0, 'F6l install(desktop 场景)');
+  // 先断言"未记录 profile 时回退 web"（向后兼容）：此时 desktop 现场对 web 而言不存在 → 双方都 absent，
+  //   但登记的 baseline 是"未部署"，所以仍是一致的（check 通过）；关键看下面的对照用例。
+  r = run(['check', '--home', homeD]);
+  expectExit(r, 0, 'F6l 无记录 → check 通过(回退 web)');
+  ok(/R 段: runtime-web-pkg 登记=absent 现场=absent/.test(r.text), 'F6l 无记录时按默认 web 对账(desktop 现场未被看见)');
+  // 造 desktop 现场: 副本目录 + patch 挂载行（与 deploy-web.cjs 的产物同形）
+  const deskDir = path.join(homeD, 'profiles', 'desktop');
+  const deskPkg = path.join(deskDir, 'node_modules', '@deepseek-ai', 'dsh-whale-notebook');
+  fs.mkdirSync(deskPkg, { recursive: true });
+  fs.writeFileSync(path.join(deskPkg, 'package.json'), '{"name":"@deepseek-ai/dsh-whale-notebook","version":"0.7.9"}\n');
+  fs.writeFileSync(path.join(deskDir, 'cordis.patch.yml'),
+    '# 桌面版用户自己的 patch 行(必须原样保留)\n- id: permission\n  name: "@deepseek-ai/dsh-permission-presets"\n\n'
+    + D_MARK_START + '- insert:\n    - id: whale-notebook\n' + D_MARK_END);
+  // deploy-web.cjs 部署成功后会写这条记录 —— 这里模拟同一产物
+  fs.writeFileSync(path.join(homeD, 'whale-notebook', '.lifecycle', 'runtime-profile.json'),
+    JSON.stringify({ profile: 'desktop', at: new Date().toISOString() }, null, 2) + '\n');
+  // 重新登记 → 必须认到 desktop 的现场（而不是继续看 web）
+  r = run(['install', '--apply', '--home', homeD, '--seed-dir', seedD]);
+  expectExit(r, 0, 'F6l 记录 desktop 后重新登记');
+  expectText(r, 'R: runtime-web-pkg → installed', 'F6l desktop 现场被认到 → installed(而非误报 absent)');
+  ok(siteEntry(homeD, 'runtime-web-pkg').state === 'installed', 'F6l 站点清单 pkg=installed');
+  ok(siteEntry(homeD, 'runtime-web-patch').state === 'installed', 'F6l 站点清单 patch=installed');
+  ok(/profiles[\\/]desktop/.test(siteEntry(homeD, 'runtime-web-pkg').path), 'F6l 站点路径已落在 profiles/desktop');
+  r = run(['check', '--home', homeD]);
+  expectExit(r, 0, 'F6l desktop 登记一致后 check 通过');
+  // 关键信号：R 段报"一致"= 探测确实打在 desktop 上（若还看 web，desktop 现场会被判 absent → 不一致）
+  ok(/R 段: runtime-web-pkg 登记=installed 现场=installed\(目录在位\) 一致/.test(r.text),
+    'F6l check 按 desktop 对账(R 段一致, 未误报 absent)');
+  ok(/R 段: runtime-web-patch 登记=installed 现场=installed\(标记区在位\) 一致/.test(r.text),
+    'F6l check 认出 desktop 的挂载行标记区');
+  // 摘除必须摘 desktop 的（用户自己的行原样保留）；web profile 目录根本不存在 → 不该被动过
+  r = run(['uninstall', 'detach', '--apply', '--home', homeD]);
+  expectExit(r, 0, 'F6l detach --apply（desktop）');
+  const deskPatchAfter = fs.readFileSync(path.join(deskDir, 'cordis.patch.yml'), 'utf8');
+  ok(!deskPatchAfter.includes(D_MARK_START), 'F6l desktop 的挂载行已摘除');
+  ok(deskPatchAfter.includes('- id: permission'), 'F6l desktop 用户自己的 patch 行原样保留');
+  ok(siteEntry(homeD, 'runtime-web-patch').state === 'absent', 'F6l 摘除后 patch=absent');
 }
 
 // ================= main =================
@@ -421,5 +477,6 @@ try {
   console.log(`\n结果: ${pass} PASS / ${fail} FAIL`);
   if (fail) process.exitCode = 1;
 } finally {
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 清理失败无碍 */ }
+  if (process.env.WHALE_KEEP_TMP) console.log(`保留沙盒: ${TMP}`);
+  else try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 清理失败无碍 */ }
 }

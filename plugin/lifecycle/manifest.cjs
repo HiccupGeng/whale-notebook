@@ -6,9 +6,12 @@ const fsx = require('./fsx.cjs');
 const { defaultManifestPath, siteManifestPath, backupsDir, localStamp, resolvePathTpl } = require('./consts.cjs');
 
 // ---- 上下文 ----
+// v0.7.9：ctx 里带上 profile（R 段路径模板 {profile} 用它解析）——
+//   桌面版是 desktop、纯 Web 形态是 web，由 deploy-web.cjs 部署时记录，读不到则默认 web。
 function ctxOf(home) {
-  const nb = require('./consts.cjs').resolveNbDir(home);
-  return { home, nb, pkg: path.resolve(__dirname, '..') };
+  const C = require('./consts.cjs');
+  const nb = C.resolveNbDir(home);
+  return { home, nb, pkg: path.resolve(__dirname, '..'), profile: C.readRuntimeProfile(home) };
 }
 
 // ---- 包内默认清单（只读） ----
@@ -62,9 +65,20 @@ function pruneSite(defaultManifest, site) {
 }
 
 // 合并视图: 默认(结构) + 站点(状态) 按 id 对位。返回 defaultEntries 每条附 siteEntry(可空)
+// v0.7.9：顺带把站点清单的 path 按当前 ctx 重新解析 —— 路径是**派生数据**（含 {profile} 模板，
+//   会随部署目标变化），不能停在首次 install 那一刻的值，否则 status/check 会去旧 profile 探测。
 function mergedView(home) {
   const def = loadDefault();
   const site = loadSite(home);
+  const ctx = ctxOf(home);
+  if (site && Array.isArray(site.entries)) {
+    for (const se of site.entries) {
+      const d = def.entries.find((e) => e.id === se.id);
+      if (!d) continue;
+      const resolved = resolvePathTpl(d.path, ctx);
+      if (se.path !== resolved) se.path = resolved;
+    }
+  }
   const byId = {};
   if (site) for (const se of site.entries) byId[se.id] = se;
   return { def, site, entries: def.entries.map((e) => ({ def: e, site: byId[e.id] || null })) };

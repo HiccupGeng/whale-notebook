@@ -1,5 +1,6 @@
 // lifecycle/consts.cjs - 生命周期子模块: 常量与路径解析（自举约束: 仅 node 内建, 不 require 业务模块）
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -12,6 +13,10 @@ const LC_DIRNAME = '.lifecycle';
 const BACKUPS_DIRNAME = 'backups';
 const QUARANTINE_DIRNAME = 'quarantine';
 const SITE_MANIFEST = 'manifest.json';
+// v0.7.9：R 段（面板部署）的目标 profile 记录 —— 由 scripts/deploy-web.cjs 在部署成功后写入，
+//   lifecycle 读它来对账/卸载到同一个 profile（桌面版 = desktop，纯 Web 形态 = web）。
+const DEFAULT_PROFILE = 'web';
+const RUNTIME_PROFILE_FILE = 'runtime-profile.json';
 
 // 本模块所在目录的上级 = 插件包根（默认清单 manifest.json 所在处; 运行位置无关, __dirname 固定）
 function pkgDir() {
@@ -44,15 +49,30 @@ function siteManifestPath(home) {
   return path.join(lcDir(home), SITE_MANIFEST);
 }
 
-// 路径模板变量替换（清单内 {dshHome} {nbDir} {pkgDir} → 绝对路径）
+// v0.7.9：R 段的 profile 名（部署目标）。默认 'web'（纯 Web 服务形态）；
+//   桌面版（Windows 的 DeepSeek Harness.exe）跑的是 'desktop' profile，由 deploy-web.cjs
+//   在部署成功后写入 runtime-profile.json 记录。lifecycle 读它来对账/卸载到**同一个** profile，
+//   否则会在 web 上找不到足迹而把 desktop 上的挂载行留成孤儿。
+function readRuntimeProfile(home) {
+  const f = path.join(lcDir(home), RUNTIME_PROFILE_FILE);
+  try {
+    const rec = JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (rec && typeof rec.profile === 'string' && rec.profile.trim()) return rec.profile.trim();
+  } catch { /* 无记录 / 损坏 → 默认 */ }
+  return DEFAULT_PROFILE;
+}
+
+// 路径模板变量替换（清单内 {dshHome} {nbDir} {pkgDir} {profile} → 绝对路径）
 function resolvePathTpl(tpl, ctx) {
+  const c = ctx || {};
   const vars = {
-    '{dshHome}': ctx.home,
-    '{nbDir}': ctx.nb,
-    '{pkgDir}': ctx.pkg,
+    '{dshHome}': c.home,
+    '{nbDir}': c.nb,
+    '{pkgDir}': c.pkg,
+    '{profile}': c.profile || DEFAULT_PROFILE,
   };
   let out = String(tpl);
-  for (const k of Object.keys(vars)) out = out.split(k).join(vars[k]);
+  for (const k of Object.keys(vars)) out = out.split(k).join(vars[k] == null ? '' : vars[k]);
   return path.resolve(out);
 }
 
@@ -131,7 +151,8 @@ const HELP = `dsh-whale-notebook lifecycle ${VERSION} — 安装/卸载/清单�
 
 module.exports = {
   VERSION, PLUGIN_NAME, AGENTS_FILE, SKILL_FILE, NB_DIRNAME, LC_DIRNAME, BACKUPS_DIRNAME,
-  QUARANTINE_DIRNAME, SITE_MANIFEST,
+  QUARANTINE_DIRNAME, SITE_MANIFEST, DEFAULT_PROFILE, RUNTIME_PROFILE_FILE,
   pkgDir, defaultManifestPath, resolveHome, resolveNbDir, lcDir, backupsDir, quarantineDir,
   siteManifestPath, resolvePathTpl, localStamp, isoLocal, AGENTS_TEMPLATE, HELP,
+  readRuntimeProfile,
 };

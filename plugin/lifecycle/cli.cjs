@@ -226,13 +226,22 @@ function runtimeProbe(def, ctx, se) {
 
 // 站点清单补齐: 包内默认清单新增/改名的条目(例如 R 段 runtime-pkg → runtime-web-pkg)在旧站点清单里没有 →
 // 按默认结构补骨架(pending), 随后由 realizeRuntime 用现场探测覆盖 R 段状态。
+// v0.7.9：**已存在条目的 path 也要按当前 ctx 重新解析**。动因：R 段路径含 {profile}
+//   （桌面版 desktop / 纯 Web 形态 web），profile 会随部署目标变化；旧写法对已存在条目直接
+//   continue，路径停在首次 install 那一刻解析的值 → 换 profile 后探测仍看旧 profile，
+//   于是"现场明明部署了却登记 absent"（实测本机复现）。path 是派生数据，始终以模板为准。
 function ensureSiteEntries(site, def, ctx) {
   const added = [];
   for (const e of def.entries) {
-    if (site.entries.some((x) => x.id === e.id)) continue;
+    const resolved = C.resolvePathTpl(e.path, ctx);
+    const exist = site.entries.find((x) => x.id === e.id);
+    if (exist) {
+      if (exist.path !== resolved) exist.path = resolved;
+      continue;
+    }
     site.entries.push({
       id: e.id, segment: e.segment, kind: e.kind, owner: e.owner,
-      path: C.resolvePathTpl(e.path, ctx),
+      path: resolved,
       agentsMode: e.agentsMode || null,
       state: 'pending',
       hashAfter: null, hashBefore: null, adoptedAt: null, backups: [],
@@ -284,8 +293,11 @@ function detachRuntime(home, opts) {
   }
   const tool = deployToolPath();
   const args = ['--undo', '--apply', ...(flags.yes ? ['--yes'] : [])];
+  // v0.7.9：把"当初部署到哪个 profile"传给唯一写入者 —— 否则桌面版（desktop）会被
+  //   当成默认 web 卸载，挂载行与副本原地留成孤儿。记录缺失时 readRuntimeProfile 回退 web。
+  const runtimeProfile = C.readRuntimeProfile(home);
   out('plan', `动作交由唯一写入者: ${tool}`);
-  out('plan', `  node "${tool}" ${args.join(' ')}`);
+  out('plan', `  node "${tool}" ${args.join(' ')}` + (runtimeProfile === C.DEFAULT_PROFILE ? '' : `  (profile: ${runtimeProfile})`));
   if (!flags.yes) out('plan', '  (包目录会保留; 要连副本目录一起删, 请加 --yes)');
   if (!flags.apply) {
     out('info', 'dry-run: 未执行任何写操作(patch 未改、目录未删); 确认后重跑加 --apply');
@@ -299,7 +311,8 @@ function detachRuntime(home, opts) {
   }
   const res = spawnSync(process.execPath, [tool, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_HOME: home }, // 关键: 让工具作用于同一个 home(含 --home 覆盖的场景)
+    // 关键: 让工具作用于同一个 home(含 --home 覆盖的场景) 与同一个 profile
+    env: { ...process.env, DSH_HOME: home, DSH_PROFILE: runtimeProfile },
   });
   const txt = `${res.stdout || ''}${res.stderr || ''}`.trim();
   if (txt) for (const line of txt.split('\n')) out('tool', line);
