@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-whale-notebook",
   "description": "鲸鱼闪闪发光的小本本: DSH 自我进化机制(模块化插件) — 采集会话问题/人工审核入库/AGENTS 自动段生效; 预留展示/对话框/桌宠扩展面",
-  "version": "0.7.9",
+  "version": "0.7.10",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -14,7 +14,7 @@
   "dsh": {
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-runtime"]
+      "inject": ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-api-workspace-controller"]
     }
   },
   "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "manifest.json", "src/**/*.cjs", "src/**/*.md", "lifecycle/**/*.cjs", "lifecycle/**/*.md"],

@@ -1,4 +1,4 @@
-// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.7.9：面板部署目标 profile 可配置 · v0.7.8：实时采集 + 决策箱面板 API + 拉取式暂存 + 自动收集开关 + 历史深掘）
+// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.7.10：浏览器半边适配 DSH 0.2.x 客户端服务时机 · v0.7.9：面板部署目标 profile 可配置 · v0.7.8：实时采集 + 决策箱面板 API + 拉取式暂存 + 自动收集开关 + 历史深掘）
 // 浏览器半边见 ./client.js（panel bundle，经 package.json dsh.client 声明由 client-modules 收录）。
 // host half 职责：
 //   ① 实时采集：订阅 DSH 会话事件总线 `session/event`，把「工具失败/特征」当场判出入待审箱
@@ -14,7 +14,7 @@ import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 import { zstdAvailable } from '../src/collector/decoder.cjs';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.9' };
+const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.10' };
 
 function sendJson(res, code, obj) {
   try {

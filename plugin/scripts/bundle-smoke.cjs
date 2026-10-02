@@ -65,4 +65,19 @@ for (const s of ['/whale/settings', '/whale/sweep', 'SETTINGS_MODES', '自动收
 }
 if (!/var autoAddMode = null/.test(code)) throw new Error('v0.7.8 约定：自动收集初值必须是 null（未知态，等 GET /whale/settings 落到真值）');
 if (!/var showA = pending > 0 \|\| deferred > 0 \|\| readPin\(\)/.test(code)) throw new Error('v0.7.8 约定：面板可见性必须含 pin（否则待审=0 时开关够不着）');
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.8 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收/自动收集开关/⛏历史深掘/面板记忆）');
+// v0.7.10 内容断言：与 DSH 0.2.x 客户端服务对齐（服务现取 + retain 投递 + uiWorkspace 导航/建目录 + 主视图判定当前会话）
+for (const s of ['syncServices', 'svcOf', 'deliverPrompt', 'callOpenSession', 'retain(', 'uiWorkspace', 'mainView', '0.2.x']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.10 结构: ' + s);
+}
+if (!/function syncServices\(\)/.test(code)) throw new Error('v0.7.10 约定：客户端服务必须在每次动作前现取（syncServices）');
+// 反证式约定：开机一次性快照与已移除的旧 API 不得回流（注释里提到它们不算，这里是调用/赋值形态）
+const FORBIDDEN_V710 = [
+  [/try \{ sessions = ctx\.get/, 'apply 时一次性快照 ctx.get("sessions")'],
+  [/sessions\.open\(newId\)/, '旧 sessions.open(newId)（0.2.x 已移除）'],
+  [/waitBinding\(/, '旧 waitBinding 轮询（0.2.x 新建会话无 binding）'],
+  [/workspaces\.createDirectory\(/, '旧 workspaces.createDirectory（已移到 ctx.uiWorkspace）'],
+];
+for (const [pattern, what] of FORBIDDEN_V710) {
+  if (pattern.test(code)) throw new Error('v0.7.10 约定：不得回流的旧客户端 API —— ' + what);
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.8 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收/自动收集开关/⛏历史深掘/面板记忆）+ v0.7.10（服务现取/retain 投递/uiWorkspace 导航/无旧 API 回流）');

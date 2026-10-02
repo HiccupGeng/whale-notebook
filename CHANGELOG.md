@@ -1,7 +1,51 @@
 # 更新日志（CHANGELOG）
 
 > **版本沿革的唯一明细入口。** 根 `README.md`、`plugin/README.md`、`PROJECT-INTRO.md` 只写「当前状态」与用法；历史动因、实测数据、设计裁定、踩过的坑都在本文件。
-> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.9`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+> 版本号口径：插件包 `plugin/package.json`（当前 `0.7.10`）；生命周期工具 `plugin/lifecycle/` 另有独立版本（当前 `0.2.0`）。
+
+## v0.7.10（2026-10-02）面板浏览器半边适配 DSH 0.2.x 客户端服务（修「当前环境无会话服务」）
+
+**起因（用户实测）**：桌面版 GUI 待审箱里点 💬「详细讨论」，只弹一句「当前环境无会话服务，无法开新会话」。
+**排查结论**：**不是**桌面版/profile 的问题（面板、宿主端点、部署副本都正常，部署副本与仓库 `lib/client.js` SHA256 逐字节一致），
+而是**内核版本漂移**：本机 DSH 是 `0.2.0-rc.2`，客户端 `sessions` / `workspaces` 已改由官方
+`dsh-api-session-controller` / `dsh-api-workspace-controller` 的**客户端半边**提供，而它们的 `inject` 链要求
+「WebSocket 连接建立 + gateway 装好 remote 命名空间」之后才 `provide`（`cordis` 严格模式下，提供者 fiber 未 ACTIVE 时
+`ctx.get()` 只返回 `undefined`）。本面板 client fiber **不声明 inject**、开机最先 apply，旧写法又在 `apply()` 里
+`ctx.get("sessions")` **取一次并永久缓存** → 必然是 `null` → 💬讨论 / ⚡自动处理 / ⛏总结会话全废。
+（面板声明的 `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime"]` 是 0.1.x 时代的排序保证，该包在新核心里**已不存在**，
+缺失的行会被静默忽略 —— 这也解释了为什么"以前能用、现在不能用"。）
+
+### 修法（全部在 `plugin/lib/client.js`，宿主半边无改动）
+
+| # | 旧写法（0.2.x 已失效） | 新写法（官方口径） |
+|---|---|---|
+| ① | `apply()` 时 `ctx.get("sessions")` 取一次 | 每次动作前 `syncServices()` 现取（`svcOf` 三态降级：取到 / undefined / 抛错 → null） |
+| ② | `waitBinding()` 轮询 `sessions.binding(id)` 5s | `sessions.retain(id,{source})` → `await ref.ready` → `ref.binding.session.prompt(blocks,"queue")` → `release`（`deliverPrompt`，与 `dsh-client-ui-workspace`/`-sidebar-right` 同口径） |
+| ③ | `sessions.open(id)` 跳转 | `ctx.uiWorkspace.openSession(id)`（`callOpenSession`，缺失即降级提示"未能自动跳转"） |
+| ④ | `workspaces.createDirectory(parent,name)` | `ctx.uiWorkspace.createDirectory(path,name)`（取不到就跳过建目录直接注册） |
+| ⑤ | `sessions.list.getSnapshot().current` | 当前会话 = 快照里 `retainedBy.mainView > 0` 的那条（官方 UI 同口径；旧字段仅兜底） |
+
+**关键认识**：`sessions.binding(id)` 在 0.2.x 里**只对已 retain 的会话有值** —— 新建会话永远轮询不到，
+即旧代码即使没被①挡住，也会在 5s 超时后**静默丢掉开局消息**（讨论会话拿不到上下文）。故②是本次一并修掉的第二处坑。
+
+### 自测（16 → 17 个测试文件；641 → 673 断言 + 1 项变异反证）
+
+- 新增 `plugin/scripts/api-compat.selftest.cjs`（32 断言，v0.7.10）：① `svcOf` 三态；② `deliverPrompt` 正序
+  （ready 先于 prompt）+ 四类失败降级 + 必 release；③ `callOpenSession`；④ `currentSessionId`（mainView 口径 + 旧字段兜底）；
+  ⑤ **端到端回归**：DOM 桩 boot 面板（服务缺席 = 真实的开机时序）→ 服务就绪 → 点真实渲染出来的 💬 →
+  断言真的建会话（落点=候选唯一工作区）、开局消息经 retain 送达且带「本会话工作区：…」、导航走 `uiWorkspace.openSession`、
+  toast 报「已开讨论会话」；⑥ 服务始终缺席时只降级提示、不抛错。
+- 新增 `plugin/scripts/api-compat.mutation.cjs`（反证）：把"每次现取"变异回"开机取一次"，自测立即变红（exit 1）——
+  证明这套断言真能抓住该回归，而不是靠缝隙缺失。
+- `plugin/scripts/bundle-smoke.cjs`：+ v0.7.10 结构断言与**旧 API 回流禁令**（`try { sessions = ctx.get` 形态、
+  `sessions.open(newId)`、`waitBinding(`、`workspaces.createDirectory(` 一律禁止再出现）。
+- 全套复跑：17 个测试文件 **673 PASS / 0 FAIL** + 变异反证通过（2026-10-02 本机实测）。
+
+### 部署与生效
+
+- `deploy-web.cjs --profile desktop --apply` 重新部署到 `profiles/desktop`（面板属客户端 bundle，**改动需重启 DSH 生效**；
+  宿主端点仍即时生效）。
+- 验证路径：重启后点 💬 → 应在「落点路由」判定的工作区里新建会话、自动跳过去、开局消息含候选上下文/同族证据/只读约束。
 
 ## v0.7.9（2026-10-01）面板部署支持 desktop profile · 同步流程补 skills/ 与两处护栏
 

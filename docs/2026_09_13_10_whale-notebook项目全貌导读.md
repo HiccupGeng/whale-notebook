@@ -11,11 +11,11 @@
 |---|---|
 | 是什么 | DeepSeek Harness（DSH）的**自我进化机制**：挖本机全部会话里反复出现的坑 → 提炼候选 → **人逐条确认** → 写入全局经验库 → 注入 `~/.dsh/AGENTS.md`，让后续会话不再重犯 |
 | 代码规模 | 骨架约 5000 行（`plugin/src` + `plugin/lib` + `plugin/lifecycle`），测试约 2000 行 |
-| 版本 | 插件 `0.7.8`（`plugin/package.json`）｜ 生命周期 `0.2.0`（`plugin/lifecycle/consts.cjs`） |
+| 版本 | 插件 `0.7.10`（`plugin/package.json`）｜ 生命周期 `0.2.0`（`plugin/lifecycle/consts.cjs`） |
 | 语言/运行时 | 纯 CommonJS/ESM 混用（`src/**` 与 `lifecycle/**` 是 `.cjs`，`lib/**` 是 ESM）｜ 仅 Node 内建，**零第三方依赖**｜需 Node ≥ 22.15 / 23.8（zstd 内建） |
-| 测试 | **16 个测试文件 / 626 断言 PASS / 0 FAIL**（2026-10-01 本机实测；改造前为 609，+17 为 desktop profile 相关） |
+| 测试 | **17 个测试文件 / 673 断言 PASS / 0 FAIL + 1 项变异反证**（2026-10-02 本机实测；v0.7.10 +32 = DOM 桩点真实 💬 的端到端；反证 = 改回"开机取一次"必须变红） |
 | 数据落点 | 运行实例在 `~/.dsh/whale-notebook/`，**用户记忆数据永不进仓库**（`.gitignore` + `sync-release` 双重兜底） |
-| 本机状态 | ✅ **已安装并部署到 desktop profile**；宿主 API 已实测生效（6 个 GET + 写端点全 200、闸门四项全拦），面板 UI 待重启 DSH（详见 §8.3） |
+| 本机状态 | ✅ **已安装并部署到 desktop profile**；宿主 API 已实测生效（6 个 GET + 写端点全 200、闸门四项全拦）；**v0.7.10 修掉"💬 详细讨论 → 当前环境无会话服务"**（DSH 0.2.x 客户端服务时机/API），重启 DSH 后生效（详见 §8.3/§8.4） |
 
 ## 1. 本机落地实况与环境
 
@@ -308,20 +308,55 @@ ctx.on('session/event') → live.onEvent()
 
 `uninstall remove` **原样保留 D 段**——记忆永不清。所有写操作默认干跑出计划，确认后 `--apply`。
 
-### 8.3 下一步：重启 DSH 让面板 UI 出现（实测结论）
+### 8.3 重启 DSH 让面板生效（2026-10-01 实测；口径已被 8.4 修正）
 
-**实测（2026-10-01）：宿主半边已经被加载，不需要重启；需要重启的是浏览器半边。**
+**当时的实测结论：宿主半边已经被加载，不需要重启；需要重启的是浏览器半边。**
 
 | 半边 | 状态 | 证据 |
 |---|---|---|
-| **H 宿主**（`lib/index.js` 的 11 个 `/whale/*` 端点 + 实时采集） | ✅ **已生效** | `/whale/inbox`→200 `pending=7`；`/whale/live`→200 `version=0.7.8`、`live.enabled=true` 且已跟踪当前会话；`POST /whale/scan`→200；四项端点闸门实测 403/403/403/415 |
-| **U 浏览器**（`lib/client.js` 决策箱悬浮面板） | ❌ **未加载** | client bundle 未进 boot graph，需重启 DSH 重新计算 |
+| **H 宿主**（`lib/index.js` 的 11 个 `/whale/*` 端点 + 实时采集） | ✅ 已生效（0.7.8） | `/whale/inbox`→200 `pending=7`；`/whale/live`→200 `version=0.7.8`、`live.enabled=true` 且已跟踪当前会话；`POST /whale/scan`→200；四项端点闸门实测 403/403/403/415 |
+| **U 浏览器**（`lib/client.js` 决策箱悬浮面板） | ❌ 未加载 | client bundle 未进 boot graph，需重启 DSH 重新计算 |
 
-**结论：重启一次 DSH 即可看到面板**（待审 7 条）。重启后建议顺手确认：
-GUI 右缘出现决策箱悬浮件；若没出现，先跑 `node plugin\scripts\deploy-web.cjs --check` 确认副本对账通过。
+> ⚠️ **8.4 已推翻上表第二行的因果与第一行的口径**：那次"宿主已生效"是观测 confound（先部署 → 用户重启 → 才测端点）；
+> 干净对照（部署后不重启）显示 `/whale/live` 仍自报旧版本 → **宿主与浏览器两边都需重启 dsh**。
 
-> 这条把原文档「宿主半边改动需重启」的口径**细化了**：`cordis.patch.yml` 的加载器行会被运行中的实例重新解析
-> （所以宿主半边热生效），而 client 模块图是启动时算的（所以浏览器半边必须重启）。
+### 8.4 v0.7.10：面板能显示 ≠ 面板能用 —— 💬「当前环境无会话服务」的真根因（2026-10-02 实测）
+
+**现象**：面板正常出现、待审能刷新、⟳/✕/开关都可用，只有 **💬 详细讨论**（以及隐藏的 ⚡ 自动处理、⛏ 完成后的总结会话）弹
+「当前环境无会话服务，无法开新会话」。
+
+**排查（三步排除 + 一步定性）**：
+
+1. 排除部署/profile：`profiles/desktop/cordis.patch.yml` 有挂载行、`node_modules` 有副本，且**副本与权威源逐字节一致**（SHA256）。
+2. 排除"面板整体没起来"：面板 DOM、`/whale/*` 请求全部正常 → client bundle 确实加载了。
+3. 读内核源码定性：本机 DSH `0.2.0-rc.2` 里 `sessions` / `workspaces` 是**客户端**服务，由
+   `dsh-api-session-controller`（`inject = ['connection','fileUpload','typert','remote','remote.commands','remote.session','remote.subagents']`）
+   与 `dsh-api-workspace-controller`（`inject = ['remote','remote.workspace']`）的客户端半边**在连接建立 + gateway 装好 remote 命名空间之后**才 `provide`；
+   `cordis` 严格模式下提供者 fiber 未 ACTIVE 时 `ctx.get()` 只返回 `undefined`。
+4. 定性：面板 client fiber **不声明 inject**、开机最先 apply，旧写法在 `apply()` 里 `ctx.get("sessions")` **取一次并永久缓存** ⇒ 必然是 `null`。
+   面板原来声明的 `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime"]` 是 0.1.x 的排序保证，**该包在新内核里已不存在**，缺失行被静默忽略 → 这就是"以前能用、现在不能用"的原因。
+
+**结论：与桌面版/profile 无关**（两个 profile 的 bundles 逐字相同、客户端插件图相同；`dsh web` 形态同样会中招），是内核版本漂移。
+
+**v0.7.10 的修法**（全部在浏览器半边 `lib/client.js`；宿主半边零改动）：
+
+| # | 旧写法（0.2.x 已失效） | 新写法 |
+|---|---|---|
+| ① | `apply()` 时 `ctx.get("sessions")` 取一次 | 每次动作前 `syncServices()` 现取（`svcOf` 三态降级） |
+| ② | `waitBinding()` 轮询 `sessions.binding(id)`（新建会话永不命中 → 超时后**静默丢首条消息**） | `retain(id,{source})` → `await ref.ready` → `ref.binding.session.prompt(blocks,"queue")` → `release` |
+| ③ | `sessions.open(id)` | `ctx.uiWorkspace.openSession(id)` |
+| ④ | `workspaces.createDirectory(parent,name)` | `ctx.uiWorkspace.createDirectory(path,name)` |
+| ⑤ | `sessions.list.getSnapshot().current` | 快照里 `retainedBy.mainView > 0` 的那条（官方 UI 同口径） |
+
+**验证**：新增 `scripts/api-compat.selftest.cjs`（32 断言，DOM 桩 boot 面板 → 服务就绪 → 点真实渲染出的 💬 → 断言建会话/投递/导航/toast），
+外加 `scripts/api-compat.mutation.cjs` 变异反证（把"现取"改回"开机取一次"必须变红）；`bundle-smoke` 增加旧 API 回流禁令。
+全套 17 个测试文件 **673 PASS / 0 FAIL**。
+
+**待你操作**：重启 DSH（面板属客户端 bundle，无法热加载）→ 点 💬 应看到：在"讨论落点"判定的工作区里新建会话、自动跳过去，
+开局消息含候选上下文 + 同族证据 + 只读约束。
+
+> **重启口径（本节更正 §8.3 的旧说法）**：`cordis.patch.yml` 的加载器行虽会被运行中的实例重新解析，但**已加载的宿主模块不会重载**
+> （干净对照：部署后不重启，`/whale/live` 仍自报旧 `version`）→ 宿主代码改动同样要重启；client 模块图更是启动时算定的 → 浏览器半边必须重启。
 > 顺序铁律仍然成立：**先 `deploy-web --apply`，再重启** —— 反序的话重启加载的是旧副本。
 
 ## 9. 精读中发现的文档漂移（建议顺手修）
@@ -340,7 +375,7 @@ GUI 右缘出现决策箱悬浮件；若没出现，先跑 `node plugin\scripts\
 
 ```powershell
 # 全量自检（全部在临时沙盒跑，绝不触碰真实 ~/.dsh）
-node plugin\lifecycle\selftest.cjs                    # 120 PASS 安装/卸载/清单/漂移分级/不碰真实部署反证
+node plugin\lifecycle\selftest.cjs                    # 152 PASS 安装/卸载/清单/漂移分级/desktop 端到端/不碰真实部署反证
 node plugin\src\ui\server.selftest.cjs                #  82 PASS 面板 host 逻辑 + 端点闸门 + 开关写路径纪律
 node plugin\src\store\repo.selftest.cjs               #  34 PASS 严格读/CAS/写锁/编号下限/回声轮转/TTL
 node plugin\src\collector\engine.selftest.cjs         #  38 PASS 异步一致/窗口化/维护窗口/取消清理
@@ -354,11 +389,13 @@ node plugin\src\core\similarity.selftest.cjs          #  20 PASS 同族判定（
 node plugin\scripts\panel-actions.selftest.cjs        #  30 PASS 面板两个新入口纯函数
 node plugin\scripts\links-doctor.selftest.cjs         #  43 PASS 悬空链接体检
 node plugin\scripts\discuss-route.selftest.cjs        #  28 PASS 讨论落点路由
+node plugin\scripts\api-compat.selftest.cjs           #  32 PASS（v0.7.10）DOM 桩起面板 → 点真实 💬 → 建会话/投递/导航
+node plugin\scripts\api-compat.mutation.cjs           #  变异反证（改回"开机取一次"必须变红）
 node scripts\redact.test.cjs                          #  22 PASS 打码回归
-node plugin\scripts\bundle-smoke.cjs                  #  结构断言（client bundle 桩，不计 PASS 数）
+node plugin\scripts\bundle-smoke.cjs                  #  结构断言（client bundle 桩 + 旧客户端 API 回流禁令，不计 PASS 数）
 ```
 
-实测合计 **609 PASS / 0 FAIL**（2026-09-13）。这些自检是**改代码时的第一道防线**，改动后必须全绿再同步发布。
+实测合计 **673 PASS / 0 FAIL + 1 项变异反证**（2026-10-02，17 个测试文件）。这些自检是**改代码时的第一道防线**，改动后必须全绿再同步发布。
 
 ## 11. 待办与后续方向
 

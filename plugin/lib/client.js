@@ -6,7 +6,8 @@
 //   POST /whale/inbox/delete     -> 删除（移入 archive，可恢复）
 //   GET  /whale/solved           -> 已解决墙聚合 stats/global/projects/disabled（v0.4）
 //   GET  /whale/entry?id=E###    -> 条目全文（v0.4；行展开详情）
-//   ctx.sessions / ctx.workspaces（官方 client-runtime 服务）-> 自动处理(投递当前会话)/详细讨论(新会话)
+//   ctx.sessions / ctx.workspaces / ctx.uiWorkspace（官方客户端服务，DSH 0.2.x 口）-> 自动处理(投递当前会话)/详细讨论(新会话)
+//     注意：0.2.x 里这些服务**开机时尚未提供**（连接建立 + remote 装好后才有）→ 一律现取，禁止 apply 时快照（见 v0.7.10 注释）
 // v0.3 语义：自动处理 = 判定表硬规则（模板内嵌）；重大隐患 -> agent 固定行 [WHALE-RISK]，
 //            面板轮询会话消息快照（ConversationSnapshot.nodes / .partial）识别并弹红色警示条。
 // v0.4 语义：已解决墙 = 轻口径（入库即已处理）；全局区/项目区分组，行点击拉条目全文展开；
@@ -25,6 +26,15 @@
 //   工作区未知 / 未注册 / 同名歧义 → 回退当前工作区，并在 toast 里说明原因；
 //   面板页脚常显三态开关「自动｜🐳 全局｜📁 项目」（选择记 localStorage）供手动覆盖；
 //   落点与依据随每次 toast 报出，并写进新会话的开局消息（本会话工作区：… 路由依据：…）。
+// v0.7.10（2026-10，DSH 0.2.x 客户端 API 兼容 —— 修「当前环境无会话服务」）：
+//   根因：内核里 sessions / workspaces 已由官方 dsh-api-*-controller 的**客户端半边**提供，而它们在
+//   "连接建立 + remote 命名空间装好"之后才 provide；本面板 fiber 无 inject、开机最先 apply，
+//   旧写法在 apply 时 get 一次 → 永久 undefined（💬详细讨论 / ⚡自动处理 / ⛏总结会话全废）。
+//   改法：① 服务改为每次动作前 syncServices() 现取（svcOf 带降级）；② 投递开局消息改官方口径
+//   retain(id,{source}) → await ref.ready → ref.binding.session.prompt(...) → release（deliverPrompt）；
+//   ③ 导航改用 ctx.uiWorkspace.openSession（旧 sessions.open 已移除）；④ 「鲸鱼全局」建目录改用
+//   ctx.uiWorkspace.createDirectory（旧 workspaces.createDirectory 已移除）；⑤ 当前会话改按
+//   "主视图 retain 的那条"判定（快照已无 current 字段）。
 // v0.7.8（2026-09）：待审箱页两个新入口（需求：开关 + 一键历史深掘）——
 //   ① 页脚「自动收集」开关（复用 .wh-seg 样式，两态：自动入箱｜仅暂存）：
 //        状态**取自服务端** GET /whale/settings（不是 localStorage —— 它改的是真实采集行为）；
@@ -248,21 +258,52 @@ window.__ModuleLoader__.load({
 			var i = String(text || "").indexOf("\n---\n");
 			return i >= 0 ? text.slice(i + 5) : text;
 		}
-		function waitBinding(sessions, id, timeoutMs) {
-			var t0 = Date.now();
-			return new Promise(function (resolve) {
-				(function poll() {
-					try {
-						var b = sessions.binding(id);
-						if (b && b.session) return resolve(b);
-					} catch (e) { /* keep polling */ }
-					if (Date.now() - t0 >= timeoutMs) return resolve(null);
-					setTimeout(poll, 60);
-				})();
+		// ---- v0.7.10：与内核对话的四个缝隙（每个都自带降级路径，见各函数注释）----
+		// 取服务：cordis 严格模式下"提供者 fiber 未 ACTIVE"时 get() 返回 undefined（未声明时可能抛）→ 统一成 null。
+		function svcOf(ctx, name) {
+			try { return ctx.get(name) || null; } catch (e) { return null; }
+		}
+		// 投递开局消息：0.2.x 里只有被 retain 的会话才有 binding —— 旧写法轮询 sessions.binding(id) 对"刚新建的会话"
+		// 必然超时，于是首条消息被静默丢掉。官方口径（dsh-client-ui-workspace / -sidebar-right）：
+		// retain(id,{source}) → await ref.ready → ref.binding.session.prompt(blocks,"queue") → release。
+		function deliverPrompt(sessions, id, msg) {
+			var ref = null;
+			try { ref = sessions.retain(id, { source: "whalePanel" }); }
+			catch (e) { return Promise.resolve(false); }
+			return Promise.resolve(ref.ready).then(function () {
+				var binding = null;
+				try { binding = ref.binding; } catch (e) { binding = null; }
+				if (!binding || !binding.session || typeof binding.session.prompt !== "function") return false;
+				return Promise.resolve(binding.session.prompt([{ type: "text", text: msg }], "queue")).then(
+					function () { return true; },
+					function () { return false; }
+				);
+			}, function () { return false; }).then(function (ok) {
+				try { ref.release(); } catch (e) { /* 已释放/会话已结束：不影响本次投递结果 */ }
+				return ok;
 			});
 		}
+		// 导航到会话：0.2.x 由 UI 服务负责（旧 sessions.open(id) 已移除）；取不到服务返回 false，由调用方降级提示。
+		function callOpenSession(uiWs, id) {
+			try {
+				if (uiWs && typeof uiWs.openSession === "function") { uiWs.openSession(id); return true; }
+			} catch (e) { /* 落到 false */ }
+			return false;
+		}
+		// 当前会话：0.2.x 的 sessions.list 快照没有 current 字段 —— 以"主视图正在 retain 的那条"为准
+		// （官方 UI 同口径），旧内核的 current 仅作兜底；都取不到返回 undefined（调用方按"当前工作区"处理）。
 		function currentSessionId(sessions) {
-			try { return sessions.list.getSnapshot().current; } catch (e) { return undefined; }
+			try {
+				var snap = (sessions && sessions.list ? sessions.list.getSnapshot() : null) || {};
+				var byId = snap.byId || {};
+				var ids = Object.keys(byId);
+				for (var i = 0; i < ids.length; i++) {
+					var row = byId[ids[i]];
+					if (row && row.retainedBy && row.retainedBy.mainView > 0) return ids[i];
+				}
+				if (typeof snap.current === "string") return snap.current;
+			} catch (e) { /* keep undefined */ }
+			return undefined;
 		}
 		function workspaceIdOf(sessions, workspaces, cur) {
 			try {
@@ -547,10 +588,25 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			if (typeof document === "undefined") return;
 			var cssNode = ensureCss(); // v0.7.3：本次创建的样式节点（卸载时由 disposer 回收）
+			// v0.7.10（根因修复）：客户端服务**不能**在 apply 时快照 —— 本面板 fiber 不声明 inject，开机最先激活；
+			// 而 DSH 0.2.x 里 sessions / workspaces / uiWorkspace 由官方控制器在"连接建立 + remote 命名空间装好"
+			// 之后才 provide（cordis 严格模式下未 ACTIVE 的服务 get() 只返回 undefined）。旧写法开机取一次 →
+			// 永久 null → 所有会话动作都提示"当前环境无会话服务"（与 desktop/web 形态无关，是内核版本漂移）。
+			// 现改为：每次动作前 syncServices() 现取。服务是 cordis 活对象，取到后长期有效，再取是廉价操作。
 			var sessions = null;
 			var workspaces = null;
-			try { sessions = ctx.get("sessions"); } catch (e) { /* 面板降级为只读 */ }
-			try { workspaces = ctx.get("workspaces"); } catch (e) { /* 讨论时按默认工作区 */ }
+			var uiWorkspace = null;
+			function syncServices() {
+				sessions = svcOf(ctx, "sessions");
+				workspaces = svcOf(ctx, "workspaces");
+				uiWorkspace = svcOf(ctx, "uiWorkspace");
+				return sessions;
+			}
+			// 导航到会话（旧 sessions.open(id) → 0.2.x 的 UI 服务）；失败返回 false，调用方据此降级提示。
+			function openSession(id) {
+				uiWorkspace = uiWorkspace || svcOf(ctx, "uiWorkspace");
+				return callOpenSession(uiWorkspace, id);
+			}
 
 			var rows = [];
 			var pending = 0;
@@ -800,6 +856,7 @@ window.__ModuleLoader__.load({
 			}
 			function doSweep() {
 				if (sweepBusy) return toast("深掘已在运行中…");
+				syncServices();   // v0.7.10：现取服务（开机时还没被 provide）
 				if (!sessions) toast("提示：当前环境无会话服务，深掘仍会执行，但不会自动开总结会话");
 				sweepBusy = true;
 				btnSweep.disabled = true;
@@ -831,6 +888,7 @@ window.__ModuleLoader__.load({
 			function openSweepSession(j) {
 				var hasWork = (j.added || 0) + (j.bumped || 0) > 0 || (j.pending || 0) > 0;
 				if (!hasWork) { toast("历史已是最新：无新发现、待审箱为空（未开总结会话）"); return; }
+				syncServices();   // v0.7.10：现取服务（深掘可能跑了几分钟，期间重连过也要拿最新的）
 				if (!sessions) return;
 				ensureGlobalWorkspace().then(function (wsId) {
 					return { workspaceId: wsId, label: GLOBAL_WS.title, reason: "历史深掘跨全部工作区" };
@@ -841,22 +899,23 @@ window.__ModuleLoader__.load({
 					var msg = sweepMessage(j, rows, t);
 					if (!msg) return null;
 					var opts = (t.workspaceId !== undefined && t.workspaceId !== null) ? { workspaceId: t.workspaceId } : {};
-					return sessions.create(opts).then(function (newId) {
-						return waitBinding(sessions, newId, 5000).then(function (bind) {
-							if (bind) {
-								try {
-									return bind.session.prompt([{ type: "text", text: msg }], "queue").then(function () { return newId; }, function () { return newId; });
-								} catch (e) { return newId; }
-							}
-							return newId;
+					return Promise.resolve(sessions.create(opts)).then(function (newId) {
+						// v0.7.10：先导航再投递（旧 waitBinding + sessions.open 在 0.2.x 已不可用）
+						var opened = openSession(newId);
+						return deliverPrompt(sessions, newId, msg).then(function (sent) {
+							return { id: newId, opened: opened, sent: sent };
 						});
 					}, function (err) {
 						toast("总结会话新建失败：" + (err && err.message ? err.message : String(err)) + "（深掘结果已在待审箱）");
 						return null;
-					}).then(function (newId) {
-						if (!newId) return;
-						sessions.open(newId);
-						toast("已开总结会话 → " + t.label + "（" + t.reason + "）");
+					}).then(function (res) {
+						if (!res) return;
+						if (!res.sent) {
+							toast("已新建总结会话 → " + t.label + "，但任务书未送达，请手动补一条（深掘结果已在待审箱）");
+							return;
+						}
+						toast("已开总结会话 → " + t.label + "（" + t.reason + "）"
+							+ (res.opened ? "" : "｜未能自动跳转，请在侧栏打开"));
 					});
 				}, function (err) {
 					toast("开会话失败：" + (err && err.message ? err.message : String(err)) + "（深掘结果已在待审箱）");
@@ -1072,13 +1131,20 @@ window.__ModuleLoader__.load({
 			function ensureGlobalWorkspace() {
 				if (globalWsId) return Promise.resolve(globalWsId);
 				if (globalWsPromise) return globalWsPromise;
+				syncServices();   // v0.7.10：惰性准备时的服务必须现取（开机时它们还没被 provide）
 				if (!workspaces) return Promise.reject(new Error("当前环境无工作区服务"));
 				globalWsPromise = Promise.resolve()
 					.then(function () {
 						var hit = findWorkspace(wsItems(), GLOBAL_WS.name) || findWorkspace(wsItems(), GLOBAL_WS.title);
 						if (hit) return hit.workspaceId;
 						return Promise.resolve()
-							.then(function () { return workspaces.createDirectory(GLOBAL_WS.parent, GLOBAL_WS.name); })
+							// v0.7.10：目录原语已从 workspaces 移到 UI 服务（ctx.uiWorkspace.createDirectory）。
+							// 取不到就跳过建目录直接注册——目录已存在时 workspaces.create 本来也能成功。
+							.then(function () {
+								uiWorkspace = uiWorkspace || svcOf(ctx, "uiWorkspace");
+								if (!uiWorkspace || typeof uiWorkspace.createDirectory !== "function") return null;
+								return uiWorkspace.createDirectory(GLOBAL_WS.parent, GLOBAL_WS.name);
+							})
 							.catch(function () { return null; })   // 目录已存在即走到这里
 							.then(function () { return workspaces.create({ path: GLOBAL_WS.path }); })
 							.then(function (view) {
@@ -1126,31 +1192,29 @@ window.__ModuleLoader__.load({
 				});
 			}
 			function openDiscussion(r, buildMsg, mode) {
-				if (!sessions) return toast("当前环境无会话服务，无法开新会话");
+				syncServices();   // v0.7.10：点击瞬间现取服务（开机时还没被 provide，旧的一次性快照必然失败）
+				if (!sessions) return toast("当前环境无会话服务，无法开新会话（DSH 客户端尚未就绪，稍后重试）");
 				resolveDiscussTarget(r, mode || "auto").then(function (t) {
 					var msg = buildMsg(t);
 					if (!msg) return toast("候选数据缺失，无法构造消息");
 					var opts = (t.workspaceId !== undefined && t.workspaceId !== null) ? { workspaceId: t.workspaceId } : {};
-					return sessions.create(opts).then(function (newId) {
-						return waitBinding(sessions, newId, 5000).then(function (bind) {
-							if (bind) {
-								try {
-									return bind.session.prompt([{ type: "text", text: msg }], "queue").then(function () {
-										return newId;
-									}, function () {
-										return newId;
-									});
-								} catch (e) { return newId; }
-							}
-							return newId;
+					return Promise.resolve(sessions.create(opts)).then(function (newId) {
+						// v0.7.10：先导航（让主视图 retain 住，用户立刻看到新会话），再投递开局消息
+						var opened = openSession(newId);
+						return deliverPrompt(sessions, newId, msg).then(function (sent) {
+							return { id: newId, opened: opened, sent: sent };
 						});
 					}, function (err) {
 						toast("新建会话失败：" + (err && err.message ? err.message : String(err)));
 						return null;
-					}).then(function (newId) {
-						if (!newId) return;
-						sessions.open(newId);
-						toast("已开讨论会话：" + r.id + " → " + t.label + "（" + t.reason + "）");
+					}).then(function (res) {
+						if (!res) return;
+						if (!res.sent) {
+							toast("已新建讨论会话（" + r.id + " → " + t.label + "），但开局消息未送达，请手动补一条");
+							return;
+						}
+						toast("已开讨论会话：" + r.id + " → " + t.label + "（" + t.reason + "）"
+							+ (res.opened ? "" : "｜未能自动跳转，请在侧栏打开"));
 					});
 				}, function (err) {
 					toast("鲸鱼全局工作区不可用：" + (err && err.message ? err.message : String(err)) + "（未开会话）");
@@ -1219,27 +1283,20 @@ window.__ModuleLoader__.load({
 			}
 
 			function doAuto(r) {
+				syncServices();   // v0.7.10：现取服务
 				if (!sessions) return toast("当前环境无会话服务，自动处理不可用");
 				var cur = currentSessionId(sessions);
 				if (!cur) return toast("请先打开一个会话（自动处理投递到当前会话）");
 				apiDetail(r.id).then(function (detail) {
 					var msg = autoMessage(r, detail);
 					if (!msg) return toast("候选数据缺失，无法构造消息");
-					waitBinding(sessions, cur, 4000).then(function (bind) {
-						if (!bind) return toast("会话服务尚未就绪，请稍后重试");
-						try {
-							bind.session.prompt([{ type: "text", text: msg }], "queue").then(function (res) {
-								if (res && res.ok) {
-									toast("已交给当前会话自动处理 " + r.id);
-									watchRisk(cur, r);
-								} else {
-									toast("投递失败：" + ((res && res.error && (res.error.message || res.error.code)) || "未知错误"));
-								}
-							}, function (err) {
-								toast("投递失败：" + (err && err.message ? err.message : String(err)));
-							});
-						} catch (err) {
-							toast("投递失败：" + (err && err.message ? err.message : String(err)));
+					// v0.7.10：投递走 deliverPrompt（retain + ready + prompt）；当前会话已由主视图 retain，等价于旧 binding 用法
+					deliverPrompt(sessions, cur, msg).then(function (ok) {
+						if (ok) {
+							toast("已交给当前会话自动处理 " + r.id);
+							watchRisk(cur, r);
+						} else {
+							toast("投递失败：会话未就绪或已结束，请稍后重试");
 						}
 					});
 				});
@@ -1350,7 +1407,12 @@ window.__ModuleLoader__.load({
 			readPin: readPin,
 			writePin: writePin,
 			sweepSummaryText: sweepSummaryText,
-			sweepMessage: sweepMessage
+			sweepMessage: sweepMessage,
+			// v0.7.10：0.2.x 客户端 API 缝隙（服务降级 / 投递 / 导航 / 当前会话）——见 api-compat.selftest.cjs
+			svcOf: svcOf,
+			deliverPrompt: deliverPrompt,
+			callOpenSession: callOpenSession,
+			currentSessionId: currentSessionId
 		};
 		return module.exports;
 	}
