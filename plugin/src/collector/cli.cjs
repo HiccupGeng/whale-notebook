@@ -44,6 +44,21 @@ function run(argv) {
     console.log(text);
     return { ok: true, text, data: out };
   }
+  if (flags.has('--bind')) {
+    // v0.8.1（只读）：查看候选聚簇的 hash，供把历史条目手工绑上 signatures（复发统计匹配键）
+    const at = args.indexOf('--bind');
+    const cid = (args[at + 1] || '').trim();
+    const state = repo.readState();
+    const clusters = state.clusters || {};
+    const hashes = Object.keys(clusters).filter((h) => clusters[h] && clusters[h].cid === cid);
+    const owner = listEntries().find((e) => (e.signatures || []).some((s) => hashes.includes(s)));
+    const L = [`候选 ${cid || '(缺编号；用法 --bind C###)'}：${hashes.length} 个聚簇哈希`];
+    for (const h of hashes) L.push(`  ${h}｜${clusters[h].cat}｜n=${clusters[h].n || 0}｜${clusters[h].text || ''}`);
+    L.push(owner ? `→ 已绑定条目 ${owner.id}（signatures ${(owner.signatures || []).length} 个）` : '→ 尚未绑定任何条目（可写入该条目的 signatures: [ ... ]）');
+    const text = L.join('\n');
+    console.log(text);
+    return { ok: true, text, data: { cid, hashes } };
+  }
   if (flags.has('--render-rules')) {
     // 预览：当前 active 条目 → AGENTS.md 自动段正文（agent 入库前先看它保证格式一致）
     const settings = repo.readSettings();

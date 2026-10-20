@@ -6,14 +6,29 @@ const repo = require('../store/repo.cjs');
 const agents = require('../inject/agents.cjs');
 const { renderEntryFile, ruleLine } = require('../core/schema.cjs');
 
+// v0.8.1：入库时把候选聚簇名下全部 hash 绑进条目 signatures（复发统计的匹配键）。
+// 一个 cid 可能对应多个 hash（同一坑的不同变体）——全部绑定，否则新变体出现时会漏计。
+function bindSignatures(entry, state) {
+  if (Array.isArray(entry.signatures) && entry.signatures.length) return entry.signatures.slice();
+  const cid = entry.candidate;
+  if (!cid) return [];
+  const out = [];
+  for (const [h, c] of Object.entries((state && state.clusters) || {})) {
+    if (c && c.cid === cid) out.push(h);
+  }
+  return out;
+}
+
 // entries: 本次拟入库条目的完整对象（见 schema.renderEntryFile 字段）
 // 返回：entryFiles / indexMd / agentsBody / ruleLines（全部为待写内容，未触碰磁盘）
-function planCommit({ newEntries }) {
+// v0.8.1：entry.candidate = 'C###' 时自动绑定该候选的聚簇哈希；state 可显式传入（缺省现读）
+function planCommit({ newEntries, state }) {
   const existing = repo.listEntries();
+  const st = state || repo.readState();
   const nextId = repo.nextEntryId(existing);
   const entryFiles = newEntries.map((e, i) => {
     const id = 'E' + String(parseInt(nextId.slice(1), 10) + i).padStart(3, '0');
-    const full = { ...e, id };
+    const full = { ...e, id, signatures: bindSignatures(e, st) };
     return { path: `${repo.P.entries}\\${id}-${String(e.slug || 'entry').replace(/[^\w-]/g, '')}.md`, entry: full, content: renderEntryFile(full) };
   });
   const all = [...existing, ...entryFiles.map((f) => f.entry)];

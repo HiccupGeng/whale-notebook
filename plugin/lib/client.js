@@ -72,6 +72,12 @@ window.__ModuleLoader__.load({
 			".wh-open-solved .wh-card-solved{display:flex}",
 			".wh-card-solved{width:336px;max-height:460px}",
 			".wh-badge2{position:absolute;top:-5px;right:-7px;min-width:15px;height:15px;padding:0 3px;border-radius:99px;background:#2f9e6e;color:#fff;font-size:10px;line-height:15px;text-align:center;font-weight:700;box-sizing:border-box}",
+			// v0.8.1：条目有效性折叠区（懒加载；只读端点 /whale/effectiveness）
+			".wh-eff{margin:6px 10px 2px;padding:6px 8px;border-radius:8px;background:rgba(120,150,255,.08);border:1px solid rgba(120,150,255,.18)}",
+			".wh-eff-sum{font-size:11px;font-weight:700;margin-bottom:3px}",
+			".wh-eff-row{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#565b66);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			".wh-eff-row b{font-weight:700;color:var(--dsw-alias-label-primary,#24272d)}",
+			".wh-eff-empty{font-size:11px;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
 			".wh-stats{flex:none;display:flex;align-items:center;gap:10px;padding:4px 12px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06))}",
 			".wh-sec{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px 2px;font-size:11px;font-weight:700;color:var(--dsw-alias-label-primary,#24272d)}",
 			".wh-sec-n{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);font-weight:600}",
@@ -128,7 +134,32 @@ window.__ModuleLoader__.load({
 			".wh-alert-btn{flex:1;padding:5px 4px;border:none;border-radius:6px;cursor:pointer;font:600 11px/1 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:inherit}",
 			".wh-alert-btn:hover{filter:brightness(.96)}",
 			".wh-alert-btn-primary{background:#e5484d;color:#fff}",
-			".wh-alert-btn-ghost{background:rgba(128,128,128,.14)}"
+			".wh-alert-btn-ghost{background:rgba(128,128,128,.14)}",
+			// v0.7.11：候选「全貌」窗——只读预览（不调用模型、零 token）。独立于 280px 窄卡，避免挤在小卡里看长文。
+			".wh-prow{cursor:pointer}",
+			".wh-sheet{display:none;position:fixed;right:300px;top:50%;transform:translateY(-50%);width:min(480px,calc(100vw - 24px));max-height:78vh;z-index:2147482040;flex-direction:column;border-radius:12px;background:var(--dsw-alias-bg-base,#ffffff);border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.16));box-shadow:0 14px 44px rgba(0,0,0,.30);overflow:hidden;font:12px/1.55 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:var(--dsw-alias-label-primary,#24272d);-webkit-user-select:text;user-select:text}",
+			".wh-sheet-on{display:flex}",
+			"@media (max-width:900px){.wh-sheet{right:10px;width:calc(100vw - 20px)}}",
+			".wh-sheet-head{flex:none;display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.08));background:rgba(90,130,255,.07)}",
+			".wh-sheet-id{flex:none;font-weight:700}",
+			".wh-sheet-cat{flex:none;font-size:10px;line-height:1.5;padding:1px 6px;border-radius:99px;background:rgba(90,130,255,.18);color:var(--dsw-alias-label-secondary,#565b66)}",
+			".wh-sheet-title{flex:1;min-width:0;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			".wh-sheet-body{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 4px}",
+			".wh-sheet-body::-webkit-scrollbar{width:6px}",
+			".wh-sheet-body::-webkit-scrollbar-thumb{background:rgba(128,128,128,.35);border-radius:3px}",
+			".wh-sheet-meta{flex:none;display:flex;flex-wrap:wrap;gap:3px 10px;padding:8px 10px 6px;font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);border-bottom:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06))}",
+			".wh-sheet-sec{margin:0 0 9px}",
+			".wh-sheet-h{font-weight:700;font-size:11px;margin-bottom:3px;color:var(--dsw-alias-label-primary,#24272d)}",
+			".wh-sheet-pre{white-space:pre-wrap;word-break:break-word;background:rgba(128,128,128,.09);border-radius:6px;padding:6px 8px;font:11px/1.5 ui-monospace,Consolas,monospace;color:var(--dsw-alias-label-secondary,#565b66);max-height:280px;overflow:auto}",
+			".wh-sheet-li{margin:0 0 3px;padding-left:8px;border-left:2px solid rgba(90,130,255,.25);font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#565b66);word-break:break-word}",
+			".wh-sheet-empty{font-size:11px;color:var(--dsw-alias-label-tertiary,#8a90a0)}",
+			".wh-sheet-hint{font-size:10px;color:var(--dsw-alias-label-tertiary,#8a90a0);line-height:1.5}",
+			".wh-sheet-acts{flex:none;display:flex;gap:6px;padding:8px 9px;border-top:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.08))}",
+			".wh-sheet-btn{flex:1;padding:6px 4px;border:none;border-radius:7px;cursor:pointer;font:600 11px/1.2 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:inherit}",
+			".wh-sheet-btn:hover{filter:brightness(.96)}",
+			".wh-sheet-btn:disabled{opacity:.45;cursor:default;filter:none}",
+			".wh-sheet-btn-primary{background:#3b6cf0;color:#fff}",
+			".wh-sheet-btn-ghost{background:rgba(128,128,128,.14)}"
 		].join("");
 		// v0.7.3：返回"本次创建的 style 节点"（复用既有则返回 null）——谁创建谁回收：
 		//   跨代复用的节点不能被后一代卸载时误删（否则会打断仍在运行的上一代面板）。
@@ -266,18 +297,34 @@ window.__ModuleLoader__.load({
 		// 投递开局消息：0.2.x 里只有被 retain 的会话才有 binding —— 旧写法轮询 sessions.binding(id) 对"刚新建的会话"
 		// 必然超时，于是首条消息被静默丢掉。官方口径（dsh-client-ui-workspace / -sidebar-right）：
 		// retain(id,{source}) → await ref.ready → ref.binding.session.prompt(blocks,"queue") → release。
-		function deliverPrompt(sessions, id, msg) {
+		function deliverPrompt(sessions, id, msg, title) {
 			var ref = null;
 			try { ref = sessions.retain(id, { source: "whalePanel" }); }
 			catch (e) { return Promise.resolve(false); }
 			return Promise.resolve(ref.ready).then(function () {
 				var binding = null;
 				try { binding = ref.binding; } catch (e) { binding = null; }
-				if (!binding || !binding.session || typeof binding.session.prompt !== "function") return false;
-				return Promise.resolve(binding.session.prompt([{ type: "text", text: msg }], "queue")).then(
-					function () { return true; },
-					function () { return false; }
-				);
+				if (!binding || !binding.session) return false;
+				var session = binding.session;
+				// v0.7.12：先落标题（带编号）再投递——标题服务只在会话"尚无标题"时才自动生成，
+				//   所以这一步同时保证「编号必在标题里」和「不再多花一次标题生成调用」。
+				//   改名失败不阻塞投递（只是标题退回自动生成）。
+				var pre = Promise.resolve(true);
+				if (title && typeof session.rename === "function") {
+					try {
+						pre = Promise.resolve(session.rename(title)).then(
+							function () { return true; },
+							function () { return true; }
+						);
+					} catch (e) { pre = Promise.resolve(true); }
+				}
+				return pre.then(function () {
+					if (typeof session.prompt !== "function") return false;
+					return Promise.resolve(session.prompt([{ type: "text", text: msg }], "queue")).then(
+						function () { return true; },
+						function () { return false; }
+					);
+				});
 			}, function () { return false; }).then(function (ok) {
 				try { ref.release(); } catch (e) { /* 已释放/会话已结束：不影响本次投递结果 */ }
 				return ok;
@@ -424,6 +471,17 @@ window.__ModuleLoader__.load({
 			if (!r) return null;
 			return "候选 " + r.id + "｜类别 " + r.cat + "｜出现 " + r.n + " 次｜工作区 " + r.ws + "｜首次出现 " + r.time + "｜现象：" + r.text;
 		}
+		// v0.7.12：讨论会话的标题 = 「编号 · 现象片段」。
+		// 为什么必须显式设置：DSH 的首消息标题由 LLM 总结，编号经不经常保留不可控
+		//   （实测同一批候选里有的标题带 C143、有的只剩"文件编辑冲突错误会诊"，后者就找不回待审条目）。
+		//   标题服务只在"全新会话、尚无标题"时自动生成；我们在首条消息前先 rename，
+		//   于是自动标题让位给这个带编号的确定性标题（顺带省掉一次标题生成调用）。
+		function candidateSessionTitle(r) {
+			if (!r || !r.id) return null;
+			var body = String(r.text || "").replace(/\s+/g, " ").trim();
+			if (body.length > 30) body = body.slice(0, 30) + "…";
+			return r.id + " · " + (body || r.catTitle || r.cat || "待审候选");
+		}
 		function detailBlock(detail) {
 			if (!detail) return "";
 			return "\n\n—— 后台详情（候选详情 sidecar，错误摘录已打码；如需更多证据可按其中「源日志路径」只读查阅）：\n" + detail;
@@ -458,7 +516,8 @@ window.__ModuleLoader__.load({
 			var c = contextLine(r);
 			if (!c) return null;
 			var L = [];
-			L.push("【决策箱转入·详细讨论】这条候选从侧边面板转到本会话单独讨论：");
+			// v0.7.12：编号写进第一行（标题的兜底：即使宿主标题服务没被 rename 压住，自动标题也能看到 C###）
+			L.push("【决策箱转入·详细讨论】" + r.id + "｜本轮是「只读会诊」：先看清问题、判断方向，再决定要不要动手。这条候选从侧边面板转到本会话：");
 			L.push(c + detailBlock(detail));
 			// v0.7.3：把「本会话落在哪个工作区、依据什么判的」写进开局消息，开局即知
 			if (route && route.label) L.push("本会话工作区：" + route.label + "（路由依据：" + route.reason + "）");
@@ -474,9 +533,18 @@ window.__ModuleLoader__.load({
 			// 保证新会话开局就有确定依据，而不是等模型自己想起来去翻 inbox。
 			var rel = relatedBlock(related);
 			if (rel) L.push(rel);
-			L.push("请先基于上述信息（如需更多证据可按源日志路径只读查阅）确认你已理解该问题的实际情况，再给出判断：问题是否真实存在／是否值得沉淀为经验／建议如何处置。");
-			L.push("v0.7 固定动作：先看上面的「同族/相似候选」，判断它们是否与本案同一根因——是则建议合并为一条经验（occurrences 取总和、证据合并），不是则指出应拆分的边界；再核对「可能已被条目覆盖」的提示，避免重复建条目。");
-			L.push("当前阶段约束：只读分析；不要执行任何写入或修改，不要调用会改动文件的工具；等用户指示后再按小本本流程入库或归档。");
+			// v0.7.11：用户反馈「点讨论就直接开始解决」——旧提示词只说"只读分析"，但没规定
+			//   "第一条回复必须停下来让用户选"。这里把会诊改成**两段式**：先给四段短结论 + A/B/C，
+			//   用户点 B 之后才允许列改动清单、再经一次同意才动手。无确认前的写入一律违规。
+			L.push("—— 会诊协议（本轮固定，按顺序执行）——");
+			L.push("1. 只读：禁止修改/创建/删除任何文件，禁止调用写入类工具（write/edit/删除/安装/改配置），禁止替用户落盘；只允许读取证据（如需更多证据，按 sidecar 里的源日志路径只读查阅）。");
+			L.push("2. 第一条回复必须短（≤15 行），按四段写，方便用户快速判断要不要修：");
+			L.push("   ① 这条在说什么：用你自己的话复述问题，让非专家也能看懂；");
+			L.push("   ② 方向判断：属于哪类问题（类别/系统层/工作流）、可能的方向或根因；不确定就写「不确定」，不要编；");
+			L.push("   ③ 值不值得修：修 / 不修（噪声、误报、一次性）/ 需要更多证据 —— 一句话理由；");
+			L.push("   ④ 请你选：A 只看（到此为止）｜B 让我修（先给改动清单）｜C 入库或删除。");
+			L.push("3. 在用户回复 A/B/C 之前不得先斩后奏：即使修复只有一行、即使问题看起来很明显，也不要直接改。用户选 B 后仍须先列「改动清单（文件 + 动作 + 风险 + 验证方式）」，得到明确同意再执行。");
+			L.push("4. 若判断是噪声/误报/已解决，直接说并建议 C，不要为了产出而硬修；若上面的同族/相似候选其实是同一根因，在 ② 里说明，入库时合并为一条（occurrences 取总和）并核对「可能已被条目覆盖」，避免重复建条目。");
 			return L.join("\n");
 		}
 		// v0.7：同族块文本（related = GET /whale/related 的返回；缺失时返回空串，退回单条上下文）
@@ -612,6 +680,8 @@ window.__ModuleLoader__.load({
 			var pending = 0;
 			var deferred = 0;    // v0.6：拉取式——已暂存、尚未入箱的新发现条数（/whale/inbox 附带）
 			var solved = null;   // v0.4：已解决墙数据（/whale/solved 聚合）
+			var eff = null;      // v0.8.1：条目有效性（/whale/effectiveness；懒加载，点 📊 才拉）
+			var effOpen = false; // 有效性折叠区是否展开（不持久化，重开面板默认收起）
 			var open = null;     // null | 'inbox' | 'solved'
 			var timer = null;
 			var toastTimer = null;
@@ -630,6 +700,12 @@ window.__ModuleLoader__.load({
 			var sweepPoll = null;              // v0.7.8：深掘进度轮询 interval
 			var sweepPollTicks = 0;
 			var noteTimer = null;              // v0.7.8：状态行临时文案的回收定时器
+			// v0.7.11：候选「全貌」窗（只读预览；打开=本地读 sidecar + 程序算的同族/相似，零 token）
+			var sheet = null;                  // DOM（惰性创建，disposer 回收）
+			var sheetId = null;                // 当前预览的候选编号（null = 未开）
+			var sheetRow = null;               // 当前预览的候选行（讨论按钮复用）
+			var sheetSeq = 0;                  // 竞态令牌：连续点不同候选时只渲染最后一条
+			var sheetData = null;              // { detail, related } 最近一次渲染结果（复制用）
 
 			var box = el("div", "wh-box");
 			// 入口 tab A：待审（有待审核候选才显示；红徽 = 待审数）
@@ -709,7 +785,7 @@ window.__ModuleLoader__.load({
 			collectBar.appendChild(segC);
 			foot.appendChild(collectBar);
 			// v0.7.8：状态行（默认是说明；深掘期间显示进度，完成后留 20s 结果再回默认）
-			var noteEl = el("div", "wh-foot-note", "候选来自 inbox.md｜删除移入 archive");
+			var noteEl = el("div", "wh-foot-note", "点击条目看全貌（只读）｜候选来自 inbox.md｜删除移入 archive");
 			foot.appendChild(noteEl);
 			card.appendChild(foot);
 			box.appendChild(card);
@@ -720,12 +796,16 @@ window.__ModuleLoader__.load({
 			// v0.4.1：对称返回钮「回待审箱」——贴刷新 ⟳ 左边
 			var btnBack = el("button", "wh-icn", "🐳");
 			btnBack.title = "待审箱：返回待审核候选列表";
+			// v0.8.1：有效性（入墙后复发）——懒加载：点一下才请求，默认打开面板不拉、不增加负担
+			var btnEff = el("button", "wh-icn", "📊");
+			btnEff.title = "条目有效性：入墙后复发统计（只读，零 token）";
 			var btnRefreshB = el("button", "wh-icn", "⟳");
 			btnRefreshB.title = "刷新";
 			var btnCloseB = el("button", "wh-icn", "✕");
 			btnCloseB.title = "收起 (Esc)";
 			headB.appendChild(headTitleB);
 			headB.appendChild(btnBack);
+			headB.appendChild(btnEff);
 			headB.appendChild(btnRefreshB);
 			headB.appendChild(btnCloseB);
 			cardB.appendChild(headB);
@@ -744,6 +824,50 @@ window.__ModuleLoader__.load({
 			if (alertEl === null) {
 				alertEl = el("div", "wh-alert");
 				document.body.appendChild(alertEl);
+			}
+			// v0.7.11：候选「全貌」窗（只读预览，零 token）。为什么独立成窗：
+			//   待审卡只有 280px 宽、现象被 -webkit-line-clamp 截成两行，用户点 💬 之前根本看不到
+			//   "这条到底在说什么、值不值得修"。here 把 sidecar 全文 + 程序算的同族/相似/已覆盖一次摊开，
+			//   数据全走既有只读端点（/whale/inbox/detail + /whale/related），不新建会话也就没有任何模型成本。
+			if (sheet === null) {
+				sheet = el("div", "wh-sheet");
+				var sheetHead = el("div", "wh-sheet-head");
+				var sheetIdEl = el("div", "wh-sheet-id", "");
+				var sheetCatEl = el("div", "wh-sheet-cat", "");
+				var sheetTitleEl = el("div", "wh-sheet-title", "只读预览 · 不消耗 token");
+				var btnSheetX = el("button", "wh-icn", "✕");
+				btnSheetX.title = "关闭 (Esc)";
+				sheetHead.appendChild(sheetIdEl);
+				sheetHead.appendChild(sheetCatEl);
+				sheetHead.appendChild(sheetTitleEl);
+				sheetHead.appendChild(btnSheetX);
+				sheet.appendChild(sheetHead);
+				var sheetMetaEl = el("div", "wh-sheet-meta");
+				var sheetBodyEl = el("div", "wh-sheet-body");
+				sheet.appendChild(sheetMetaEl);
+				sheet.appendChild(sheetBodyEl);
+				var sheetActs = el("div", "wh-sheet-acts");
+				var btnSheetDiscuss = el("button", "wh-sheet-btn wh-sheet-btn-primary", "💬 只读会诊");
+				btnSheetDiscuss.title = "开新会话，必带该候选全貌；本轮只读：先复述方向与 A/B/C 选项，等你选完才可能动手";
+				btnSheetDiscuss.disabled = true;
+				var btnSheetCopy = el("button", "wh-sheet-btn wh-sheet-btn-ghost", "📋 复制");
+				btnSheetCopy.title = "复制全貌文本（可粘贴到任意会话）";
+				var btnSheetClose = el("button", "wh-sheet-btn wh-sheet-btn-ghost", "关闭");
+				sheetActs.appendChild(btnSheetDiscuss);
+				sheetActs.appendChild(btnSheetCopy);
+				sheetActs.appendChild(btnSheetClose);
+				sheet.appendChild(sheetActs);
+				document.body.appendChild(sheet);
+				btnSheetX.addEventListener("click", function (ev) { ev.stopPropagation(); closeSheet(); });
+				btnSheetClose.addEventListener("click", function (ev) { ev.stopPropagation(); closeSheet(); });
+				btnSheetCopy.addEventListener("click", function (ev) { ev.stopPropagation(); if (sheetRow) copyText(sheetCopyText()); });
+				btnSheetDiscuss.addEventListener("click", function (ev) {
+					ev.stopPropagation();
+					var r = sheetRow;
+					if (!r) return;
+					closeSheet();
+					doDiscuss(r);
+				});
 			}
 
 			function toast(text) {
@@ -933,7 +1057,7 @@ window.__ModuleLoader__.load({
 				}
 				for (var i = 0; i < rows.length; i++) {
 					(function (r) {
-						var row = el("div", "wh-row");
+						var row = el("div", "wh-row wh-prow");
 						var meta = el("div", "wh-meta");
 						meta.appendChild(el("span", "wh-id", r.id));
 						if (riskFlags[r.id]) meta.appendChild(el("span", "wh-risk", "需人工"));
@@ -949,7 +1073,7 @@ window.__ModuleLoader__.load({
 							acts.appendChild(b1);
 						}
 						var b2 = el("button", "wh-abtn", "💬");
-						b2.title = "详细讨论：开新会话并携带该候选上下文与后台详情（落点由页脚「讨论落点」开关决定）";
+						b2.title = "只读会诊：开新会话并携带该候选全貌；本轮只复述方向与选项，等你选 A/B/C 后才可能动手（落点由页脚开关决定）";
 						var b3 = el("button", "wh-abtn wh-abtn-danger", "✕");
 						b3.title = "删除：视为已解决/无需解决，移入归档（可恢复）";
 						acts.appendChild(b2);
@@ -957,15 +1081,163 @@ window.__ModuleLoader__.load({
 						meta.appendChild(acts);
 						row.appendChild(meta);
 						var text = el("div", "wh-text", r.text);
-						text.title = "工作区 " + r.ws + "｜首次 " + r.time;
+						text.title = "工作区 " + r.ws + "｜首次 " + r.time + "｜点击查看全貌（只读）";
 						row.appendChild(text);
-						row.title = "讨论💬 / 删除✕";
+						row.title = "点击查看全貌（只读、零 token）｜💬 只读会诊｜✕ 删除";
+						// v0.7.11：整行点击 = 打开全貌窗（原行为是点行无反应，用户只能靠 💬 直接开会话）
+						row.addEventListener("click", function () { openSheet(r); });
 						b2.addEventListener("click", function (ev) { ev.stopPropagation(); doDiscuss(r); });
 						b3.addEventListener("click", function (ev) { ev.stopPropagation(); doDelete(r); });
 						list.appendChild(row);
 					})(rows[i]);
 				}
 			}
+
+			//#region candidate sheet（v0.7.11：全貌预览，只读）
+			function closeSheet() {
+				if (!sheet) return;
+				sheetSeq++;
+				sheetId = null;
+				sheetRow = null;
+				sheetData = null;
+				sheet.classList.remove("wh-sheet-on");
+				sheetBodyEl.textContent = "";
+				sheetMetaEl.textContent = "";
+				btnSheetDiscuss.disabled = true;
+			}
+			// sidecar 首行是 "# C### 候选详情"（窗头已显示编号），去掉以免重复占一行
+			function stripDetailHead(text) {
+				return String(text || "").replace(/^#\s*C\d+\s*候选详情\s*\n+/, "").trim();
+			}
+			function sheetSec(title, bodyNode) {
+				var sec = el("div", "wh-sheet-sec");
+				sec.appendChild(el("div", "wh-sheet-h", title));
+				sec.appendChild(bodyNode);
+				return sec;
+			}
+			function sheetLine(text) {
+				return el("div", "wh-sheet-li", text);
+			}
+			// 与 relatedBlock（会话消息用）同源同数据，但排版成可扫读的行；
+			// 这里只做展示，不改判据：族/相似/已覆盖仍由 /whale/related 计算，面板不猜。
+			function relatedDom(j) {
+				var wrap = el("div", "");
+				if (!j) {
+					wrap.appendChild(el("div", "wh-sheet-empty", "（同族/相似信息不可用：/whale/related 未返回）"));
+					return wrap;
+				}
+				var fam = j.family || {};
+				var vs = fam.variants || [];
+				if (vs.length) {
+					wrap.appendChild(el("div", "wh-sheet-empty", "本候选由 " + (fam.size || vs.length) + " 个变体合并，合计 " + (fam.n || 0) + " 次"));
+					for (var i = 0; i < vs.length && i < 10; i++) {
+						var v = vs[i];
+						wrap.appendChild(sheetLine((v.score != null && v.score < 1 ? "相似 " + v.score + "｜" : "") + "×" + (v.n || 1) + "｜" + (v.cat || "") + "｜" + String(v.text || "").slice(0, 180)));
+					}
+					if (vs.length > 10) wrap.appendChild(el("div", "wh-sheet-empty", "…另有 " + (vs.length - 10) + " 个变体"));
+				}
+				var rl = j.related || [];
+				if (rl.length) {
+					wrap.appendChild(el("div", "wh-sheet-empty", "其它相似候选（相似度 ≥" + ((j.thresholds && j.thresholds.related) || 0.35) + "，程序计算）"));
+					for (var k = 0; k < rl.length; k++) {
+						wrap.appendChild(sheetLine(rl[k].id + "｜×" + rl[k].n + "｜相似 " + rl[k].score + "｜" + String(rl[k].text || "").slice(0, 180)));
+					}
+				}
+				var es = j.entries || [];
+				if (es.length) {
+					wrap.appendChild(el("div", "wh-sheet-empty", "可能已被现有条目覆盖（入库前先去重）"));
+					for (var m = 0; m < es.length; m++) {
+						wrap.appendChild(sheetLine(es[m].id + "（" + es[m].category + "）｜" + String(es[m].rule || es[m].title || "").slice(0, 180)));
+					}
+				}
+				if (!vs.length && !rl.length && !es.length) wrap.appendChild(el("div", "wh-sheet-empty", "（无同族/相似候选，也未命中现有条目）"));
+				return wrap;
+			}
+			function renderSheet(r, detail, related) {
+				if (!sheet || sheetId !== r.id) return;
+				sheetData = { detail: detail || "", related: related || null };
+				var headText = stripDetailHead(detail);
+				sheetMetaEl.textContent = "";
+				var meta = [];
+				meta.push("类别 " + (r.catTitle ? r.catTitle + "（" + r.cat + "）" : r.cat));
+				meta.push("出现 ×" + r.n);
+				if (r.variants > 1) meta.push("族×" + r.variants);
+				meta.push("工作区 " + (r.ws || "?"));
+				meta.push("首次 " + (r.time || "?"));
+				for (var i = 0; i < meta.length; i++) sheetMetaEl.appendChild(el("span", "", meta[i]));
+				sheetBodyEl.textContent = "";
+				sheetBodyEl.appendChild(sheetSec("现象（一句话，已打码）", el("div", "wh-sheet-pre", r.text)));
+				sheetBodyEl.appendChild(sheetSec("后台详情（打码摘录 + 源会话引用）",
+					headText ? el("div", "wh-sheet-pre", headText) : el("div", "wh-sheet-empty", "（该候选没有详情 sidecar：旧候选或已归档）")));
+				sheetBodyEl.appendChild(sheetSec("同族与关联（程序计算，非模型猜测）", relatedDom(related)));
+				sheetBodyEl.appendChild(el("div", "wh-sheet-hint",
+					"只读预览：不调用模型、不写入任何文件。需要深入判断时点下方「只读会诊」；原始会话日志不在此展开（隐私边界）。"));
+				btnSheetDiscuss.disabled = false;
+			}
+			function openSheet(r) {
+				if (!sheet || !r) return;
+				if (sheetId === r.id && sheet.classList.contains("wh-sheet-on")) { closeSheet(); return; }
+				sheetSeq++;
+				var seq = sheetSeq;
+				sheetId = r.id;
+				sheetRow = r;
+				sheetData = null;
+				sheetIdEl.textContent = r.id;
+				sheetCatEl.textContent = r.catTitle || r.cat;
+				sheetMetaEl.textContent = "";
+				sheetBodyEl.textContent = "";
+				sheetBodyEl.appendChild(el("div", "wh-sheet-empty", "（加载详情…）"));
+				btnSheetDiscuss.disabled = true;
+				sheet.classList.add("wh-sheet-on");
+				Promise.all([apiDetail(r.id), apiRelated(r.id)]).then(function (res) {
+					if (seq !== sheetSeq) return;   // 已切到别的候选：丢弃旧响应
+					renderSheet(r, res[0], res[1]);
+				}, function () {
+					if (seq !== sheetSeq) return;
+					renderSheet(r, null, null);
+				});
+			}
+			// 复制文本与窗内一致（含同族/相似），方便粘到任意会话里继续问
+			function sheetCopyText() {
+				if (!sheetRow) return "";
+				var r = sheetRow;
+				var L = [];
+				L.push("【候选 " + r.id + "】" + (r.catTitle ? r.catTitle + "（" + r.cat + "）" : r.cat)
+					+ "｜×" + r.n + (r.variants > 1 ? "｜族×" + r.variants : "")
+					+ "｜工作区 " + (r.ws || "?") + "｜首次 " + (r.time || "?"));
+				L.push("现象：" + r.text);
+				var d = sheetData && sheetData.detail ? stripDetailHead(sheetData.detail) : "";
+				if (d) L.push("", d);
+				var rel = sheetData && sheetData.related ? relatedBlock(sheetData.related) : "";
+				if (rel) L.push("", rel);
+				return L.join("\n");
+			}
+			function fallbackCopy(t) {
+				try {
+					var ta = el("textarea", "");
+					ta.value = t;
+					ta.style.position = "fixed";
+					ta.style.left = "-9999px";
+					document.body.appendChild(ta);
+					ta.select();
+					var ok = document.execCommand("copy");
+					document.body.removeChild(ta);
+					toast(ok ? "已复制全貌文本" : "复制失败：请手动选中文本");
+				} catch (e) {
+					toast("复制失败：请手动选中文本");
+				}
+			}
+			function copyText(t) {
+				if (!t) return;
+				try {
+					if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+						navigator.clipboard.writeText(t).then(function () { toast("已复制全貌文本"); }, function () { fallbackCopy(t); });
+						return;
+					}
+				} catch (e) { /* 落到兜底 */ }
+				fallbackCopy(t);
+			}
+			//#endregion
 
 			// v0.4：已解决墙状态机（无待审且无已解决 → 整面板隐藏，保持「不打扰」）
 			// v0.7.8：新增「面板记忆」pin —— 用户主动打开过面板后，即使待审=0 也保留侧边入口。
@@ -1002,6 +1274,8 @@ window.__ModuleLoader__.load({
 			}
 
 			function setMode(mode) {
+				// v0.7.11：切卡/收起面板时全貌窗不留在屏幕上（窗只属于待审卡）
+				if (mode !== "inbox") closeSheet();
 				if (mode !== null) {
 					// v0.7.8：用户主动展开面板 → 记住这个入口（pin），并顺手对齐一次开关状态
 					if (!readPin()) writePin(true);
@@ -1088,6 +1362,7 @@ window.__ModuleLoader__.load({
 			}
 			function renderSolved() {
 				listB.textContent = "";
+				if (effOpen) listB.appendChild(effBlock()); // v0.8.1：有效性折叠区置顶
 				var s = solved;
 				if (!s || !s.stats) {
 					listB.appendChild(el("div", "wh-empty", "（加载失败，请点 ⟳ 重试）"));
@@ -1119,6 +1394,44 @@ window.__ModuleLoader__.load({
 					listB.appendChild(el("div", "wh-sec", "🛑 停用 " + s.stats.disabled));
 					for (var di = 0; di < s.disabled.length; di++) listB.appendChild(solvedRowEl(s.disabled[di], true));
 				}
+			}
+
+			// v0.8.1：条目有效性区块（只读、零 token）。数据来自 GET /whale/effectiveness：
+			//   rows[{id,verdict,spanAfter,hits,base,spanBefore,bound}] + summary + caveat
+			// 懒加载：只有点了 📊 才会请求；默认打开面板不拉这条端点。
+			function effBlock() {
+				var boxEl = el("div", "wh-eff");
+				var rs = eff && eff.rows;
+				if (!rs || !rs.length) {
+					boxEl.appendChild(el("div", "wh-eff-empty", eff ? "（暂无 active 条目）" : "（加载中…或失败，点 📊 重试）"));
+					return boxEl;
+				}
+				var sum = eff.summary || {};
+				var parts = [];
+				for (var k in sum) if (Object.prototype.hasOwnProperty.call(sum, k)) parts.push(k + " " + sum[k]);
+				boxEl.appendChild(el("div", "wh-eff-sum", "有效性：" + (parts.join("｜") || "无")));
+				for (var i = 0; i < rs.length; i++) {
+					(function (r) {
+						var line = el("div", "wh-eff-row");
+						line.appendChild(el("b", null, r.id + " " + (r.verdict || "?")));
+						line.appendChild(document.createTextNode("｜命中 " + r.hits + "（基线 " + r.base + "/" + r.spanBefore + " 天）"));
+						line.title = (r.verdict === "未绑定")
+							? "无 signatures，无法统计（新条目入库时会自动绑定）"
+							: ("入墙 " + r.spanAfter + " 天｜" + ((eff && eff.caveat) || ""));
+						boxEl.appendChild(line);
+					})(rs[i]);
+				}
+				if (eff && eff.caveat) boxEl.appendChild(el("div", "wh-eff-empty", eff.caveat));
+				return boxEl;
+			}
+			function refreshEff() {
+				fetch("/whale/effectiveness", { headers: { accept: "application/json" } })
+					.then(function (r) { return r.json(); })
+					.then(function (j) { eff = (j && j.ok) ? j : null; renderSolved(); })
+					.catch(function (err) {
+						eff = null; renderSolved();
+						console.warn("[whale-panel] 拉取 /whale/effectiveness 失败:", err && err.message ? err.message : err);
+					});
 			}
 
 			// ---- 新会话载体（详细讨论 / 风险转人工共用）----
@@ -1201,7 +1514,8 @@ window.__ModuleLoader__.load({
 					return Promise.resolve(sessions.create(opts)).then(function (newId) {
 						// v0.7.10：先导航（让主视图 retain 住，用户立刻看到新会话），再投递开局消息
 						var opened = openSession(newId);
-						return deliverPrompt(sessions, newId, msg).then(function (sent) {
+						// v0.7.12：标题带编号（C### · 现象片段），与待审条目一一对应
+						return deliverPrompt(sessions, newId, msg, candidateSessionTitle(r)).then(function (sent) {
 							return { id: newId, opened: opened, sent: sent };
 						});
 					}, function (err) {
@@ -1210,10 +1524,10 @@ window.__ModuleLoader__.load({
 					}).then(function (res) {
 						if (!res) return;
 						if (!res.sent) {
-							toast("已新建讨论会话（" + r.id + " → " + t.label + "），但开局消息未送达，请手动补一条");
+							toast("已新建只读会诊会话（" + r.id + " → " + t.label + "），但开局消息未送达，请手动补一条");
 							return;
 						}
-						toast("已开讨论会话：" + r.id + " → " + t.label + "（" + t.reason + "）"
+						toast("已开只读会诊：" + r.id + " → " + t.label + "（" + t.reason + "）｜本轮不会自动修改"
 							+ (res.opened ? "" : "｜未能自动跳转，请在侧栏打开"));
 					});
 				}, function (err) {
@@ -1303,6 +1617,8 @@ window.__ModuleLoader__.load({
 			}
 
 			function doDiscuss(r) {
+				// v0.7.11：开新会话会导航离开当前视图，全貌窗没必要留着
+				closeSheet();
 				// v0.7：先取详情与「同族/相似候选」再构造消息——新会话开局即带确定依据
 				// v0.7.3：落点由页脚三态开关决定（自动 / 强制🐳全局 / 强制📁项目）
 				Promise.all([apiDetail(r.id), apiRelated(r.id)]).then(function (res) {
@@ -1313,6 +1629,7 @@ window.__ModuleLoader__.load({
 			function doDelete(r) {
 				apiDelete(r.id).then(function () {
 					delete riskFlags[r.id];
+					if (sheetId === r.id) closeSheet();
 					toast("已移入归档：" + r.id);
 					return refresh(true);
 				}, function (err) {
@@ -1341,13 +1658,22 @@ window.__ModuleLoader__.load({
 				});
 			});
 			btnRefreshB.addEventListener("click", function () { renderSolved(); refreshSolved(false); });
+			// v0.8.1：有效性开关——首次展开才拉数据；再次点击收起（数据缓存，不重复请求）
+			btnEff.addEventListener("click", function () {
+				effOpen = !effOpen;
+				if (effOpen && !eff) refreshEff();
+				else renderSolved();
+			});
 			// v0.7.8：⛏ 历史深掘（全量重扫历史 → 入待审箱 + 开总结会话）
 			btnSweep.addEventListener("click", function () { doSweep(); });
 			function onDocDown(ev) {
-				if (open && !box.contains(ev.target)) setMode(null);
+				// v0.7.11：点在「全貌」窗内不算外部点击（否则一拖选正文就把面板收起了）
+				if (open && !box.contains(ev.target) && !(sheet && sheet.contains(ev.target))) setMode(null);
 			}
 			function onKey(ev) {
-				if (ev.key === "Escape") setMode(null);
+				if (ev.key !== "Escape") return;
+				if (sheet && sheet.classList.contains("wh-sheet-on")) { closeSheet(); return; }
+				setMode(null);
 			}
 			function onFocus() { refresh(true); refreshSolved(true); }
 			function onVis() { if (!document.hidden) { refresh(true); refreshSolved(true); } }
@@ -1372,6 +1698,8 @@ window.__ModuleLoader__.load({
 					if (toastTimer) clearTimeout(toastTimer);
 					if (alertTimer) clearTimeout(alertTimer);
 					if (box && box.parentNode) box.parentNode.removeChild(box);
+					if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet);
+					sheet = null;
 					if (toastEl && toastEl.parentNode) toastEl.parentNode.removeChild(toastEl);
 					if (alertEl && alertEl.parentNode) alertEl.parentNode.removeChild(alertEl);
 					// v0.7.3：只回收本次创建的样式节点（复用既有时 cssNode 为 null，不动别人的节点）
@@ -1412,7 +1740,12 @@ window.__ModuleLoader__.load({
 			svcOf: svcOf,
 			deliverPrompt: deliverPrompt,
 			callOpenSession: callOpenSession,
-			currentSessionId: currentSessionId
+			currentSessionId: currentSessionId,
+			// v0.7.11：只读会诊协议（纯文本构造，可断言"未确认前不得动手"的固定行）
+			discussMessage: discussMessage,
+			relatedBlock: relatedBlock,
+			// v0.7.12：会话标题构造（编号必在标题里）
+			candidateSessionTitle: candidateSessionTitle
 		};
 		return module.exports;
 	}

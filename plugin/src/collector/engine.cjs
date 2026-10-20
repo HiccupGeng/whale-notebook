@@ -410,8 +410,40 @@ function trimDeferred(def, cap) {
   return drop.length;
 }
 
+// ---- v0.8.1 复发统计：条目 ↔ 聚簇哈希绑定索引（纯函数，不写文件）----
+// 条目 frontmatter 的 signatures[] = 该候选聚簇名下全部 hash（入库时由 commit 自动填、或 --bind 手工补）。
+// 这里只做匹配；命中记录由 ingestFresh 在"判定之后"旁路完成，不影响任何入箱结果。
+function buildEntryIndex(entries) {
+  const idx = new Map();
+  for (const e of entries || []) {
+    if (!e || e.status !== 'active') continue;
+    const createdMs = Date.parse(String(e.created || '')) || 0;
+    for (const h of (e.signatures || [])) {
+      const key = String(h || '').trim();
+      if (!key) continue;
+      const list = idx.get(key) || [];
+      list.push({ id: e.id, scope: e.scope, projects: e.projects || [], createdMs });
+      idx.set(key, list);
+    }
+  }
+  return idx;
+}
+// 事件（聚簇 hash + 工作区集合 + 时间）→ 命中的条目；项目级只认白名单工作区，条目创建前的事件不算
+function matchEntry(idx, hash, wsSet, atMs) {
+  const list = idx.get(hash);
+  if (!list || !list.length) return null;
+  for (const ent of list) {
+    if (ent.createdMs && atMs && atMs < ent.createdMs) continue;
+    if (ent.scope === 'project' && ent.projects.length) {
+      if (!ent.projects.some((w) => wsSet.has(w))) continue;
+    }
+    return ent;
+  }
+  return null;
+}
+
 // 共享入库：指纹去重 → 聚簇合并/复发/新建 → 行与 sidecar 落盘（批扫与实时采集共用）
-// opts: { dry, now, maxNewRows }
+// opts: { dry, now, maxNewRows, rebuild, entryIndex }
 function ingestFresh(rawEvents, state, settings, opts) {
   const o = opts || {};
   const dry = o.dry === true;
@@ -531,6 +563,17 @@ function ingestFresh(rawEvents, state, settings, opts) {
     }
     decisions.push(a);
   }
+
+  // v0.8.1 复发统计（旁路）：命中已绑定条目 → 记一行 hit。不改判定、不写待审箱。
+  //   rebuild 会清空指纹 → 全量历史重放，若照常记录会把统计瞬间污染成"满命中"，故显式排除。
+  const hitRows = [];
+  if (!o.rebuild && o.entryIndex && o.entryIndex.size) {
+    for (const a of agg.values()) {
+      const hit = matchEntry(o.entryIndex, a.hash, a.wsSet, a.last);
+      if (hit) hitRows.push({ e: hit.id, h: a.hash, at: a.last, n: a.n, ws: [...a.wsSet][0] || '' });
+    }
+  }
+  if (!dry && hitRows.length) { try { repo.appendHits(hitRows); } catch { /* 统计旁路失败不影响采集 */ } }
 
   // ④ 落盘（dry 时整段跳过；行与 sidecar 一次写入）
   // v0.6：deferredOn（autoAdd=false 且未显式 --add）时，新发现改为写暂存摘要，不新增待审行
@@ -873,6 +916,42 @@ function* runScanGen(mode, o, ctl) {
   }
 }
 
+// ---- v0.8.1 复发统计报表（只读；--stats 专用）----
+// 口径见 docs「小本本复发统计开发实施计划」§2：入场后日均 vs 基线日均；样本不足不结论。
+// 注意：occurrences 含同族合并，基线可能偏大 → 更容易判「有效」，报表末尾必须标注。
+function entryEffectiveness() {
+  const entries = repo.listEntries();
+  if (!entries.length) return [];
+  const hits = repo.readHits();
+  const now = Date.now();
+  const byEntry = new Map();
+  for (const h of hits) {
+    const cur = byEntry.get(h.e) || { n: 0, last: 0 };
+    cur.n += h.n;
+    if (h.at > cur.last) cur.last = h.at;
+    byEntry.set(h.e, cur);
+  }
+  const out = [];
+  for (const e of entries) {
+    if (e.status !== 'active') continue;
+    const bound = (e.signatures || []).length;
+    const h = byEntry.get(e.id) || { n: 0, last: 0 };
+    const createdMs = Date.parse(String(e.created || '')) || 0;
+    const firstMs = Date.parse(String(e.firstSeen || '')) || createdMs;
+    const spanBefore = Math.max(1, Math.round((createdMs - firstMs) / 86400000));
+    const spanAfter = createdMs ? Math.max(0, Math.round((now - createdMs) / 86400000)) : 0;
+    let verdict;
+    if (!bound) verdict = '未绑定';
+    else if (!createdMs || spanAfter < 14) verdict = '样本不足';
+    else if (h.n === 0) verdict = '有效';       // 跨度够 + 零命中 = 规则挡住（或坑不再出现）
+    else if (h.n < 3) verdict = '样本不足';     // 有复发但样本太少，不下结论
+    else if (h.n / Math.max(1, spanAfter) >= (e.occurrences || 0) / spanBefore) verdict = '无效';
+    else verdict = '减弱';
+    out.push({ id: e.id, verdict, spanAfter, hits: h.n, base: e.occurrences || 0, spanBefore, bound, last: h.last });
+  }
+  return out;
+}
+
 // --stats / --prewarm / 默认(--check|--rebuild) 的收尾（与扫描分离，便于生成器在扫描点让出）
 function* runScanTail(mode, o, ctxIn) {
   const { t0, state, settings, scan, rebuild, resolvedIndex } = ctxIn;
@@ -899,7 +978,22 @@ function* runScanTail(mode, o, ctxIn) {
     for (const [cat, c] of Object.entries(catCount).sort((a, b) => b[1].n - a[1].n)) {
       lines.push(`  ${cat}: ${c.n} 次 | 工作区: ${[...c.ws].slice(0, 3).join(', ')} | ${fmtTime(c.first)} ~ ${fmtTime(c.last)}`);
     }
-    return { ok: true, text: lines.join('\n'), data: { events: scan.events.length, byCat: catCount, scan: s } };
+    // v0.8.1：条目有效性（入墙后复发）——只读 hits.jsonl + entries frontmatter
+    const eff = entryEffectiveness();
+    if (eff.length) {
+      lines.push('');
+      lines.push('== 条目有效性（入墙后复发）==');
+      for (const r of eff) {
+        const base = `基线 ${r.base} 次/${r.spanBefore} 天`;
+        const note = r.verdict === '未绑定' ? '（无 signatures，无法统计）' : (r.verdict === '无效' ? ' → 建议改写或停用' : '');
+        lines.push(`${r.id} ${r.verdict}  入墙 ${r.spanAfter} 天｜命中 ${r.hits}（${base}）${note}`);
+      }
+      const cnt = {};
+      for (const r of eff) cnt[r.verdict] = (cnt[r.verdict] || 0) + 1;
+      const summary = Object.keys(cnt).map((k) => `${k} ${cnt[k]}`).join('｜');
+      lines.push(`（${eff.length} 条：${summary}；基线口径含同族合并，偏大）`);
+    }
+    return { ok: true, text: lines.join('\n'), data: { events: scan.events.length, byCat: catCount, scan: s, effectiveness: eff } };
   }
 
   if (mode === '--prewarm') {
@@ -923,6 +1017,8 @@ function* runScanTail(mode, o, ctxIn) {
     dry: o.dry === true,
     add: o.add === true,
     resolved: resolvedIndex,
+    rebuild,
+    entryIndex: buildEntryIndex(repo.listEntries()), // v0.8.1：复发统计匹配索引（rebuild 时只建不记）
     maxNewRows: Number.isFinite(o.maxNewRows) ? o.maxNewRows : undefined,
   });
   state.lastScan = Date.now();
@@ -1010,6 +1106,8 @@ module.exports = {
   echoSig, echoSigOf, forgetEchoDeferred,
   // v0.6.2：已处置签名索引（防重置后重扫重复开行）
   resolvedSig, loadResolvedIndex, pruneResolvedIndex, parseArchiveRow, SIG_TEXT_MAX,
+  // v0.8.1（复发统计）
+  buildEntryIndex, matchEntry, entryEffectiveness,
   // v0.7.4：归档索引 + 最大编号的 mtime 缓存（实时采集与编号下限共用）
   loadResolvedCached, READD_PREFIX_RE,
   // v0.7.5：扫描健康度落 state（/whale/live 可视化；导出供自测）

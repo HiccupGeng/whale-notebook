@@ -6,8 +6,10 @@ const { categoryTitle, sortCategoryKeys } = require('../core/schema.cjs');
 
 // 待审小列表（每条一行；供会话提醒 / GUI 面板 / 桌宠通知共用）
 // v0.5：行解析收敛到 store 层 repo.parseInboxRows（与 engine 的次数累加共用同一正则）
+// v0.7.11：每行补 catTitle（类别中文名，复用 schema 的单一来源）——面板「全貌」窗与清单
+//   都靠它让非专家一眼知道这是"哪个方向"的问题，避免只剩 git-net/encoding 这类代码名。
 function inboxViewModel() {
-  const rows = repo.parseInboxRows();
+  const rows = repo.parseInboxRows().map((r) => Object.assign({}, r, { catTitle: categoryTitle(r.cat) }));
   return { rows, pending: rows.length, headline: `待审核 ${rows.length} 条`, rowsByCat: countBy(rows, (r) => r.cat) };
 }
 

@@ -37,6 +37,9 @@ try {
   check('list.ok', l.ok === true && l.pending === 4, l);
   check('list.rows 形状与顺序', l.rows.length === 4 && l.rows[0].id === 'C001' && l.rows[3].time.indexOf('2026') === 0, l.rows);
   check('list.rows 中文/打码现象保真', l.rows[2].text.indexOf('明文贴进聊天') !== -1 && l.rows[0].cat === 'encoding', l.rows[2]);
+  // v0.7.11：行上补类别中文名（全貌窗与清单共用；来源必须是 schema 的单一类别表）
+  check('list.rows 带 catTitle（v0.7.11 全貌窗用）',
+    l.rows[0].catTitle === '编码/中文乱码(命令链路/控制台)' && l.rows[0].catTitle !== l.rows[0].cat, l.rows[0]);
 
   // v0.3 detail sidecar：写入 → detailPayload 命中/错误路径（只读不写盘）
   const DETAIL_MD = '# C002 候选详情\n\n- 一句话：edit 报 old_string not found\n\n- 错误摘录：\n```text\nError: EPERM: operation not permitted\n```\n';
@@ -145,6 +148,13 @@ try {
   const rt = repo.readEntryText('E003');
   check('readEntryText 命中', rt !== null && rt.indexOf('E003') !== -1, rt);
   check('readEntryText 未知 → null', repo.readEntryText('E777') === null && repo.readEntryText('x') === null);
+
+  // v0.8.1：条目有效性端点（只收 active；无 signatures 一律「未绑定」；带口径说明）
+  const effp = server.effectivenessPayload();
+  check('v0.8.1 effectivenessPayload 形状 + 只收 active',
+    effp.ok === true && Array.isArray(effp.rows) && effp.rows.length === 3 && effp.total === 3 && !!effp.caveat, effp);
+  check('v0.8.1 无签名条目 → 未绑定（不误判有效）',
+    effp.rows.every((r) => r.bound === 0 && r.verdict === '未绑定') && effp.summary['未绑定'] === 3, effp.summary);
 
   const md = repo.buildIndexMd(repo.listEntries());
   check('INDEX 墙标题/分区', md.indexOf('# 鲸鱼小本本 · 已解决墙（INDEX）') === 0 && md.indexOf('## 🐳 全局区') !== -1 && md.indexOf('## 📁 项目区') !== -1 && md.indexOf('🛑 停用') !== -1, md.slice(0, 300));

@@ -84,6 +84,7 @@ metadata:
      created: <YYYY-MM-DD>
      updated: <YYYY-MM-DD>
      sources: [<会话id前缀，仅作溯源>]
+     signatures: [<聚簇hash...>]  # v0.8.1 复发统计匹配键：入库时用 `mine.cjs --bind C###` 取该候选的全部哈希
      ---
      ```
    - 正文章节：`## 现象`（一行概括）／`## 根因`（要点）／`## 对策`（≥2 条可执行步骤）／`## 验证`（如何确认不再犯，可选）。
@@ -92,9 +93,12 @@ metadata:
    - 正文由 `plugin/src/inject/agents.cjs → buildSectionBody` 规范生成；落盘前先运行 `node "$env:DSH_HOME\whale-notebook\scripts\mine.cjs" --render-rules` 预览（输出即标准正文，可整段作为替换内容）。
    - 保留 `<AGENTS.md>` 中 `<!-- whale-notebook:rules -->` 与 `<!-- /whale-notebook:rules -->` 之外的全部内容；
    - 自动段 = 规则行 + 固定尾注。规则行取**全部 active 且 scope=global 的条目**按 occurrences 降序前 ≤12 条，每条一行 `- 【category】rule内容`（项目级条目永不写入自动段，其去向已在状态行注明）；
-   - 固定尾注三行：自动采集提醒句、触发词句、隐私句（样式参考现网 AGENTS.md 自动段，保持行文一致）；
+   - 固定尾注两行（v0.8.0 起已瘦身）：「采集」行（需要时才跑 `--check`、待审 ≤3 条才列清单、触发词 → 加载技能）+「写入」行（只写通用对策、先给用户确认）；隐私边界在 `<!-- whale-notebook:privacy -->` 标记区（lifecycle 第二区，**不可删**，只可压缩内容）；
+   - 状态行措辞：`状态：全局规则 N/12 生效｜active M（项目级 K 不进全局注入，见 INDEX.md「已解决墙」）`——`项目级 K` 与 `不进全局注入` 被 `ui/server.selftest.cjs` 断言引用，勿改措辞；
    - 用 edit 工具替换整个自动段后，**把改动内容展示给用户**。
 5. 把已入库的候选行从 `inbox.md` 移除，追加到 `archive/archive-<YYYYMMDD>.md`（注明入库条目 E0NN）。
+   - **绑定签名（v0.8.1，新条目必做）**：入库前先跑 `node "$env:DSH_HOME\whale-notebook\scripts\mine.cjs" --bind C###`，把输出里的全部哈希写进条目 frontmatter 的 `signatures: [...]`；否则该条目在 `--stats` 里永远显示「未绑定」，复发统计无从计算。同一 cid 的哈希要全部写上（不同变体各一条）。
+   - 复核有效性：`node "$env:DSH_HOME\whale-notebook\scripts\mine.cjs" --stats` 末尾「条目有效性」一节给出 有效/减弱/无效/样本不足。
 6. 汇报：入库 N 条（标注各自 scope）+ AGENTS.md 新增全局规则行一览。
 
 ### 4. 讨论（「小本本讨论 <主题/工作区>」，或面板某行点 💬 转新会话）

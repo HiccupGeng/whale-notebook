@@ -6,6 +6,7 @@
 const fs = require('fs');
 const repo = require('../store/repo.cjs');
 const { inboxViewModel, solvedViewModel } = require('./viewmodel.cjs');
+const engine = require('../collector/engine.cjs'); // v0.8.1：复用 entryEffectiveness（纯读）
 const { similarity, DEFAULT_THRESHOLDS } = require('../core/similarity.cjs');
 
 // v0.7.4（审计 N23）：编号允许 3 位以上 —— 原来 `^C\d{3}$` 在编号过 999 后
@@ -144,6 +145,17 @@ function solvedPayload() {
   return Object.assign({ ok: true }, solvedViewModel());
 }
 
+// v0.8.1 GET /whale/effectiveness：条目有效性（入墙后复发统计）
+// 纯读：只看 entries frontmatter + hits.jsonl，**不扫描会话日志、不写盘、不抢锁**。
+// 与 `mine.cjs --stats` 的区别：后者顺带做全量类别统计（所以要扫全部日志），面板这里不需要那部分，
+// 因此把这个报表拆成独立端点，点按钮即时返回（毫秒级）。
+function effectivenessPayload() {
+  const rows = engine.entryEffectiveness();
+  const summary = {};
+  for (const r of rows) summary[r.verdict] = (summary[r.verdict] || 0) + 1;
+  return { ok: true, rows, summary, total: rows.length, caveat: '基线口径含同族合并，偏大' };
+}
+
 // v0.4 GET /whale/entry?id=E###：条目全文（只读 entries/ 文件；行展开详情用）
 function entryPayload(id) {
   if (!EID_RE.test(id)) return { ok: false, error: `非法编号: ${id}（应为 E###）` };
@@ -234,7 +246,7 @@ function guardRequest(input, opts) {
 
 module.exports = {
   ID_RE, EID_RE, localStamp, ensureArchiveDir, listPayload, detailPayload, deleteCandidate,
-  solvedPayload, entryPayload, relatedPayload, guardRequest, isLoopbackHostHeader,
+  solvedPayload, entryPayload, relatedPayload, guardRequest, isLoopbackHostHeader, effectivenessPayload,
   // v0.7.8：面板开关（settings.autoAdd）
   SETTINGS_WRITABLE, effectiveAutoAdd, settingsPayload, updateAutoAdd,
 };

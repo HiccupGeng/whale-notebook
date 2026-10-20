@@ -1,4 +1,4 @@
-// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.7.10：浏览器半边适配 DSH 0.2.x 客户端服务时机 · v0.7.9：面板部署目标 profile 可配置 · v0.7.8：实时采集 + 决策箱面板 API + 拉取式暂存 + 自动收集开关 + 历史深掘）
+// lib/index.js - dsh-whale-notebook 插件宿主半边（v0.7.11：版本号改读 package.json · v0.7.10：浏览器半边适配 DSH 0.2.x 客户端服务时机 · v0.7.9：面板部署目标 profile 可配置 · v0.7.8：实时采集 + 决策箱面板 API + 拉取式暂存 + 自动收集开关 + 历史深掘）
 // 浏览器半边见 ./client.js（panel bundle，经 package.json dsh.client 声明由 client-modules 收录）。
 // host half 职责：
 //   ① 实时采集：订阅 DSH 会话事件总线 `session/event`，把「工具失败/特征」当场判出入待审箱
@@ -13,8 +13,13 @@ import engine from '../src/collector/engine.cjs';
 import liveModule from '../src/collector/live.cjs';
 import repo from '../src/store/repo.cjs';
 import { zstdAvailable } from '../src/collector/decoder.cjs';
+import { createRequire } from 'node:module';
 
-const PACKAGE = { name: 'dsh-whale-notebook', version: '0.7.10' };
+// v0.7.11 修复：此前 PACKAGE.version 是硬编码常量，升级时没人改它 → /whale/live 谎报旧版本。
+//   实测代价：v0.7.11 已部署、进程也已重启，/whale/live 仍报 0.7.10，导致"重启是否生效"无法判定。
+//   改为从包内 package.json 读：版本号只有一个事实源（package.json），插件报告不会再漂移。
+const pkgRequire = createRequire(import.meta.url);
+const PACKAGE = { name: 'dsh-whale-notebook', version: pkgRequire('../package.json').version };
 
 function sendJson(res, code, obj) {
   try {
@@ -114,6 +119,15 @@ export function apply(ctx) {
       sendJson(res, 200, server.solvedPayload());
     }),
   }), 'whale-notebook: GET /whale/solved');
+
+  ctx.effect(() => web.register({
+    kind: 'exact',
+    path: '/whale/effectiveness',
+    handler: wrap((req, res) => {
+      if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+      sendJson(res, 200, server.effectivenessPayload());
+    }),
+  }), 'whale-notebook: GET /whale/effectiveness');
 
   ctx.effect(() => web.register({
     kind: 'exact',

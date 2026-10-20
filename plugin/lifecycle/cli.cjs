@@ -14,7 +14,8 @@ const X = require('./fsx.cjs');
 
 const out = (prefix, msg) => console.log(`[${prefix}] ${msg}`);
 const L = { rules: '规则自动段', privacy: '隐私提示区' };
-const PRIVACY_BODY = '## 隐私提示\n\n- 本条规则写入流程：候选 → 展示 → 用户确认 → 才入库；任何写入前先给用户看将要新增/修改的行。\n- 经验条目与规则行只写通用对策；来源仅存会话 ID 作统计溯源，不复制原文。';
+// v0.8.0 瘦身：隐私区两条并一条（"只写通用对策/来源仅存会话 ID"已由 agents.cjs 的「写入」尾注承担）。
+const PRIVACY_BODY = '## 隐私提示\n\n- 本文件内容进入每个会话上下文：只放通用对策，禁止放项目业务、个人路径、密钥、会话原文。';
 const RULES_EMPTY_BODY = '## 自动段：whale-notebook 经验规则（由小本本技能生成，勿手改）\n\n状态：尚未完成首轮经验审核，暂无规则条目。';
 
 // 把规则区之后的尾部内容(已 trim 非空)原位纳入 privacy 标记: [规则区] → [规则区] + [privacy 区含 tail]

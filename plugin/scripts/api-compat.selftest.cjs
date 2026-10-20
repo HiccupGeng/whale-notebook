@@ -63,6 +63,18 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
   check('svcOf：get 抛错（未声明服务）→ null，不冒泡', I.svcOf({ get: () => { throw new Error('no such service'); } }, 'sessions') === null);
   check('svcOf：ctx 缺失 → null', I.svcOf({}, 'sessions') === null);
 
+  // ---------------------------------------------------------------- ⓪ v0.7.12 会话标题带编号
+  check('标题：编号在最前（C143 · 现象片段）',
+    I.candidateSessionTitle({ id: 'C143', text: 'old_string 未找到只读…', cat: 'tool-mode' }) === 'C143 · old_string 未找到只读…');
+  const longTitle = I.candidateSessionTitle({ id: 'C001', text: '甲'.repeat(80) });
+  check('标题：超长截断为 30 字 + …（不把整段现象塞进标题）',
+    longTitle.length === 'C001 · '.length + 31 && longTitle.endsWith('…'), longTitle);
+  check('标题：换行压成空格（标题只有一行）',
+    I.candidateSessionTitle({ id: 'C002', text: 'a\nb\tc' }) === 'C002 · a b c');
+  check('标题：缺编号 → null（不退化成无编号标题）', I.candidateSessionTitle({ text: 'x' }) === null && I.candidateSessionTitle(null) === null);
+  check('标题：无现象时退回类别中文名',
+    I.candidateSessionTitle({ id: 'C003', text: '', catTitle: 'git/网络', cat: 'git-net' }) === 'C003 · git/网络');
+
   // ---------------------------------------------------------------- ② deliverPrompt
   function fakeSessions(overrides) {
     const calls = { retain: [], prompt: [], release: [] };
@@ -245,6 +257,10 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
     return hit;
   }
   function findByText(root, text) { return find(root, (n) => n.textContent === text); }
+  function findContains(root, text) {
+    return find(root, (n) => n.children.length === 0 && typeof n.textContent === 'string' && n.textContent.indexOf(text) !== -1);
+  }
+  function hasClass(node, c) { return !!node && (' ' + node.className + ' ').indexOf(' ' + c + ' ') !== -1; }
 
   function makeFetch(services) {
     return function (url) {
@@ -258,7 +274,13 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
       } else if (url.indexOf('/whale/inbox/detail') === 0) {
         payload = { ok: true, text: '候选详情 sidecar 正文' };
       } else if (url.indexOf('/whale/related') === 0) {
-        payload = { ok: true, family: { size: 1, n: 2, variants: [] }, related: [], entries: [] };
+        payload = {
+          ok: true,
+          family: { size: 2, n: 3, variants: [{ cat: 'encoding', n: 2, text: '变体甲：同族样本', score: 0.8 }] },
+          related: [{ id: 'C002', cat: 'encoding', n: 1, text: '相似样本', score: 0.5 }],
+          entries: [{ id: 'E001', category: 'encoding', rule: '规则样本', score: 0.3 }],
+          thresholds: { related: 0.35 },
+        };
       }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(payload) });
     };
@@ -282,7 +304,7 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
   }
 
   function makeSessionCalls() {
-    return { create: [], retain: [], prompt: [], release: [], open: [] };
+    return { create: [], retain: [], prompt: [], release: [], open: [], rename: [], order: [] };
   }
   function fakeSessionService(calls) {
     return {
@@ -297,7 +319,12 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
           get binding() {
             return {
               session: {
-                prompt(blocks, mode) { calls.prompt.push([blocks, mode]); return Promise.resolve({ ok: true }); },
+                rename(title) {
+                  calls.rename.push([id, title]);
+                  calls.order.push('rename');
+                  return Promise.resolve({ ok: true, value: { title, seq: 0 } });
+                },
+                prompt(blocks, mode) { calls.prompt.push([blocks, mode]); calls.order.push('prompt'); return Promise.resolve({ ok: true }); },
               },
             };
           },
@@ -344,9 +371,14 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
       calls.create.length === 1, calls.create);
     check('端到端：落点=候选唯一工作区（planDiscuss 的口径未被破坏）',
       calls.create[0] && calls.create[0].workspaceId === 'w-sandbox', calls.create);
-    check('端到端：开局消息经 retain→ready→prompt("queue") 送达',
+    check('端到端：新会话标题带编号（C001 · 现象…，先 rename 再 prompt，自动标题让位）',
+      calls.rename.length === 1 && calls.rename[0][0] === 'sess-new'
+      && calls.rename[0][1] === 'C001 · 现象样本：命令内联中文'
+      && calls.order.join(',') === 'rename,prompt',
+      { rename: calls.rename, order: calls.order });
+    check('端到端：开局消息经 retain→ready→prompt("queue") 送达，且第一行带编号',
       calls.prompt.length === 1 && calls.prompt[0][1] === 'queue'
-      && calls.prompt[0][0][0].text.indexOf('【决策箱转入·详细讨论】') === 0,
+      && calls.prompt[0][0][0].text.indexOf('【决策箱转入·详细讨论】C001｜') === 0,
       calls.prompt[0] && calls.prompt[0][0] && calls.prompt[0][0][0] && calls.prompt[0][0][0].text.slice(0, 40));
     check('端到端：开局消息带上落点与依据（原有契约）',
       calls.prompt.length === 1 && calls.prompt[0][0][0].text.indexOf('本会话工作区：SandBox1') !== -1
@@ -356,8 +388,8 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
     check('端到端：投递后释放面板自己的引用（不留悬空 retain）',
       calls.release.length === 1 && calls.release[0] === 'sess-new', calls.release);
     const toastEl = find(document.body, (n) => n.className.indexOf('wh-toast') !== -1);
-    check('端到端：toast 报「已开讨论会话」而不是「无会话服务」',
-      !!toastEl && toastEl.textContent.indexOf('已开讨论会话') === 0
+    check('端到端：toast 报「已开只读会诊」而不是「无会话服务」',
+      !!toastEl && toastEl.textContent.indexOf('已开只读会诊') === 0
       && toastEl.textContent.indexOf('无会话服务') === -1, toastEl && toastEl.textContent);
   }
 
@@ -387,7 +419,51 @@ const flush = (ms) => new Promise((resolve) => setTimeout(resolve, ms === undefi
       { err: observedError && observedError.message, toast: toastEl && toastEl.textContent });
   }
 
-  console.log(fails ? ('FAILED: ' + fails) : 'ALL PASS（v0.7.10 面板 × DSH 0.2.x 客户端 API ' + total + ' 项断言）');
+  // ---- ⑦ v0.7.11 全貌窗：点行 = 只读预览（零 token）→ 窗内「只读会诊」才建会话 ----
+  {
+    const { document } = makeDom();
+    const calls = makeSessionCalls();
+    const services = {
+      sessions: fakeSessionService(calls),
+      workspaces: { list: { getSnapshot: () => ({ items: WS_ITEMS, phase: 'ready' }) }, create: () => Promise.resolve({ workspaceId: 'w-global' }), rename: () => Promise.resolve({}) },
+      uiWorkspace: { openSession(id) { calls.open.push(id); } },
+    };
+    const ctx = makeCtx(services);
+    const box = loadBundle({
+      document,
+      window: { addEventListener() {}, removeEventListener() {}, localStorage: { getItem: () => null, setItem() {} } },
+      fetch: makeFetch(services),
+    });
+    box.out.apply(ctx);
+    await flush(5);
+    const panelRoot = find(document.body, (n) => hasClass(n, 'wh-box'));
+    findByText(panelRoot, '待审').parentNode.click();
+    await flush(5);
+    const row = find(panelRoot, (n) => hasClass(n, 'wh-prow'));
+    check('全貌窗：候选行可点击（wh-prow）', !!row);
+    row.click();
+    await flush(20);
+    const sheet = find(document.body, (n) => hasClass(n, 'wh-sheet'));
+    check('全貌窗：点行后窗口打开（wh-sheet-on）', !!sheet && sheet.classList.contains('wh-sheet-on'));
+    check('全貌窗：打开预览不建会话、不花 token（create 仍为 0）', calls.create.length === 0, calls.create);
+    check('全貌窗：展示 sidecar 全文（打码摘录）', !!findContains(sheet, '候选详情 sidecar 正文'));
+    check('全貌窗：展示程序算的同族/相似/已覆盖',
+      !!findContains(sheet, '变体甲') && !!findContains(sheet, 'C002') && !!findContains(sheet, 'E001'));
+    const sheetDiscuss = findByText(sheet, '💬 只读会诊');
+    check('全貌窗：详情加载完成后「只读会诊」可点', !!sheetDiscuss && sheetDiscuss.disabled === false);
+    sheetDiscuss.click();
+    await flush(20);
+    check('全貌窗：点「只读会诊」才建会话', calls.create.length === 1, calls.create);
+    check('全貌窗：从窗口开会话同样先落带编号标题（C001 · 现象…）',
+      calls.rename.length === 1 && calls.rename[0][1] === 'C001 · 现象样本：命令内联中文', calls.rename);
+    check('全貌窗：开局消息带两段式协议（先四段 + A/B/C，未确认不得动手）',
+      calls.prompt.length === 1 && calls.prompt[0][0][0].text.indexOf('会诊协议') !== -1
+      && calls.prompt[0][0][0].text.indexOf('A 只看') !== -1
+      && calls.prompt[0][0][0].text.indexOf('不得先斩后奏') !== -1, calls.prompt[0] && calls.prompt[0][0][0].text.slice(0, 60));
+    check('全貌窗：开会话后窗口自动关闭（不留在新视图上）', !sheet.classList.contains('wh-sheet-on'));
+  }
+
+  console.log(fails ? ('FAILED: ' + fails) : 'ALL PASS（v0.7.10–0.7.12 面板 × DSH 0.2.x 客户端 API ' + total + ' 项断言）');
   process.exit(fails ? 1 : 0);
 })().catch((error) => {
   console.error('SELFTEST CRASH:', error && error.stack ? error.stack : error);

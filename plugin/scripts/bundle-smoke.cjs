@@ -80,4 +80,42 @@ const FORBIDDEN_V710 = [
 for (const [pattern, what] of FORBIDDEN_V710) {
   if (pattern.test(code)) throw new Error('v0.7.10 约定：不得回流的旧客户端 API —— ' + what);
 }
-console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.8 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收/自动收集开关/⛏历史深掘/面板记忆）+ v0.7.10（服务现取/retain 投递/uiWorkspace 导航/无旧 API 回流）');
+// v0.7.11 内容断言：候选「全貌」只读窗 + 两段式只读会诊协议
+for (const s of ['wh-sheet', 'openSheet', 'closeSheet', 'renderSheet', 'sheetCopyText', 'catTitle', '点击查看全貌', '会诊协议', 'A 只看', '不得先斩后奏', '只读会诊']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.11 结构: ' + s);
+}
+if (!/function openSheet\(r\)/.test(code)) throw new Error('v0.7.11 约定：全貌窗必须由 openSheet 统一打开');
+// 反证：全貌窗是零 token 的本地预览 —— 打开路径不得出现会话创建/投递调用
+const openSheetBody = (code.match(/function openSheet\(r\) \{[\s\S]*?\n\t\t\t\}/) || [''])[0];
+if (/sessions\.create|openDiscussion|deliverPrompt/.test(openSheetBody)) {
+  throw new Error('v0.7.11 约定：打开全貌窗不得建会话/投递消息（预览必须零 token）');
+}
+// v0.7.12 内容断言：新会话标题必须带 C###（先 rename 再 prompt），否则侧栏找不到待审条目
+for (const s of ['candidateSessionTitle', 'session.rename']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.7.12 结构: ' + s);
+}
+if (!/r\.id \+ " · "/.test(code)) throw new Error('v0.7.12 约定：标题必须以「编号 · 」开头');
+if (code.indexOf('deliverPrompt(sessions, newId, msg, candidateSessionTitle(r))') === -1) {
+  throw new Error('v0.7.12 约定：讨论会话必须先落带编号标题（candidateSessionTitle）再投递');
+}
+if (!/title && typeof session\.rename === "function"/.test(code)) {
+  throw new Error('v0.7.12 约定：投递前必须走 binding.session.rename(title)');
+}
+// 反证：标题必须在首条消息之前落定（DSH 标题服务只在"尚无标题"时自动生成，先 rename 才能压住自动标题）
+if (code.indexOf('Promise.resolve(session.rename(title)).then(') === -1) {
+  throw new Error('v0.7.12 约定：rename 必须先于 prompt');
+}
+// v0.8.1：已解决卡「📊 有效性」——懒加载只读端点 /whale/effectiveness
+for (const s of ['wh-eff', '/whale/effectiveness', 'btnEff']) {
+  if (code.indexOf(s) === -1) throw new Error('bundle 缺少 v0.8.1 结构: ' + s);
+}
+// v0.7.11 反证：host 半边的版本号不得再硬编码 —— 实测硬编码会让 /whale/live 谎报旧版本，
+//   "重启是否生效"因此无法判定。版本必须来自 package.json（单一事实源）。
+const indexCode = fs.readFileSync(path.join(__dirname, '..', 'lib', 'index.js'), 'utf8');
+if (/version:\s*'\d+\.\d+\.\d+'/.test(indexCode)) {
+  throw new Error('v0.7.11 约定：lib/index.js 的 version 不得硬编码（应读 package.json）');
+}
+if (indexCode.indexOf("pkgRequire('../package.json').version") === -1) {
+  throw new Error('v0.7.11 约定：lib/index.js 必须从 package.json 取版本号');
+}
+console.log('bundle OK: id=' + loaded.id + ', apply=' + typeof out.apply + ', v0.4–v0.7.8 结构完整（⚡隐藏/双卡互跳/⟳增量扫描/暂存提示/同族证据/讨论落点路由/样式回收/自动收集开关/⛏历史深掘/面板记忆）+ v0.7.10（服务现取/retain 投递/uiWorkspace 导航/无旧 API 回流）+ v0.7.11（全貌窗/只读会诊协议/版本单一事实源）+ v0.7.12（会话标题带编号/先 rename 再 prompt）');

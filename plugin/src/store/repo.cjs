@@ -477,6 +477,8 @@ function listEntries() {
       lastSeen: fm.lastSeen || '',
       rule: fm.rule || '',
       workspaces: parseList(fm.workspaces),
+      signatures: parseList(fm.signatures), // v0.8.1：该条目绑定的聚簇哈希（复发统计匹配键；旧条目缺省 []）
+      created: fm.created || '',            // v0.8.1：入库日期（复发统计的时间基线；旧条目可能缺）
       updated: fm.updated || fm.created || '',
     });
   }
@@ -567,6 +569,47 @@ function buildIndexMd(entries) {
   return L.join('\n') + '\n';
 }
 
+// ---- v0.8.1 复发统计：条目命中记录（append-only）----
+// 为什么独立于 state：state 是派生态，--rebuild 会清空；统计不能跟着丢。
+// 为什么独立于 entries：engine 不应改写 entries/（那里只由 agent 经用户确认后动）。
+// 行形态：{"e":"E005","h":"<聚簇hash>","at":<epoch ms>,"n":<次数>,"ws":"<工作区>"}
+const HITS_MAX_BYTES = 2 * 1024 * 1024;
+function hitsPath() { return path.join(NB_DIR, 'hits.jsonl'); }
+function appendHits(rows) {
+  const list = (rows || []).filter((r) => r && r.e && r.h);
+  if (!list.length) return 0;
+  if (!fs.existsSync(NB_DIR)) fs.mkdirSync(NB_DIR, { recursive: true });
+  const p = hitsPath();
+  const text = list.map((r) => JSON.stringify({
+    e: String(r.e), h: String(r.h), at: Number(r.at) || Date.now(), n: Number(r.n) || 1, ws: String(r.ws || ''),
+  })).join('\n') + '\n';
+  fs.appendFileSync(p, text, 'utf8');
+  // 体积保护：超过上限时保留最近一半（统计文件，允许裁旧；不参与任何判定）
+  try {
+    if (fs.statSync(p).size > HITS_MAX_BYTES) {
+      const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
+      fs.writeFileSync(p, lines.slice(-Math.floor(lines.length / 2)).join('\n') + '\n', 'utf8');
+    }
+  } catch { /* 裁剪失败不影响追加 */ }
+  return list.length;
+}
+function readHits() {
+  let text; try { text = fs.readFileSync(hitsPath(), 'utf8'); } catch { return []; }
+  const seen = new Set();
+  const out = [];
+  for (const line of text.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    let o; try { o = JSON.parse(s); } catch { continue; } // 坏行跳过（统计旁路，不阻断主流程）
+    if (!o || typeof o.e !== 'string' || typeof o.h !== 'string') continue;
+    const key = `${o.e}|${o.h}|${o.at}`;
+    if (seen.has(key)) continue; // 崩溃重跑/并发扫描产生的重复行按 (条目,hash,时间) 去重
+    seen.add(key);
+    out.push({ e: o.e, h: o.h, at: Number(o.at) || 0, n: Number(o.n) || 1, ws: String(o.ws || '') });
+  }
+  return out;
+}
+
 module.exports = {
   HOME, NB_DIR, P, STATE_VERSION,
   readJson, writeJson, readJsonStrict, statOf, tmpNameFor, mergeStates, stateDiag,
@@ -577,6 +620,8 @@ module.exports = {
   readInboxText, pendingCount, appendInboxRows, initInboxIfMissing, removeInboxRows, archiveInboxRows, appendEchoArchive,
   // v0.7.6（回声自我放大治理）：回声签名去重 + 健康度观测
   readEchoSignatures, echoStats, ECHO_MAX_ROWS,
+  // v0.8.1（复发统计）：条目命中记录
+  hitsPath, appendHits, readHits, HITS_MAX_BYTES,
   parseInboxRows, pendingIds, bumpInboxRows, writeInboxText,
   detailFilePath, writeDetail, readDetail, appendDetailNote, archiveDetail,
   listEntries, nextEntryId, readEntryText, buildIndexMd,

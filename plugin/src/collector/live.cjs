@@ -7,7 +7,7 @@
 //   每轮 flush 现读 state.json 再写回，避免覆盖 CLI 批扫刚建立的水位线。
 'use strict';
 const repo = require('../store/repo.cjs');
-const { ingestFresh, loadResolvedCached } = require('./engine.cjs');
+const { ingestFresh, loadResolvedCached, buildEntryIndex } = require('./engine.cjs');
 const { classifyRecord, newSessionCtx } = require('./scanner.cjs');
 
 const DEFAULT_FLUSH_MS = 1500;        // 去抖：一波重试合并成一次入库
@@ -104,6 +104,8 @@ function createLiveCollector(opts) {
           //   state 重置后撞见同内容会立刻开新行，与 CLI 行为不一致。
           const ing = ingestFresh(batch, state, settings, {
             now: Date.now(), maxNewRows, resolved: loadResolvedCached().index,
+            // v0.8.1：实时命中同样计入复发统计（条目少，每批重建索引开销可忽略）
+            entryIndex: buildEntryIndex(repo.listEntries()),
           });
           repo.writeState(state);
           stats.flushes++;

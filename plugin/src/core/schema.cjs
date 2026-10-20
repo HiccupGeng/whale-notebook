@@ -76,6 +76,7 @@ occurrences: ${entry.occurrences}
 firstSeen: ${entry.firstSeen}
 lastSeen: ${entry.lastSeen}
 workspaces: [${(entry.workspaces || []).join(', ')}]
+signatures: [${(entry.signatures || []).join(', ')}]
 rule: "${String(entry.rule).replace(/"/g, '\\"')}"
 created: ${entry.created}
 updated: ${entry.updated}
